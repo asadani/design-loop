@@ -31,7 +31,7 @@ nodes:
     role: backend           # fixed vocabulary per kind; drives style, not layout
     status: stable          # planned | in-progress | stable | deprecated
     cites:                  # drift anchors
-      - { path: src/api/checkout.ts, lines: [10, 80], commit: a1b2c3d }
+      - { path: src/api/checkout.ts, lines: [10, 80], hash: "sha256:9f2c..." }
     note: Validates cart, calls payments.
   - id: queue
     label: Order queue
@@ -96,8 +96,8 @@ Ops allowed: `add_node`, `update_node`, `remove_node`, `add_edge`, `update_edge`
 ```
 
 Signal types in v0 (all deterministic, no model judgement):
-`cite-moved`, `cite-missing`, `no-cite`, `stale-planned` (planned for N turns),
-`orphan-edge`, `unpinned-after-human-edit`.
+`cite-moved`, `cite-missing`, `no-cite`, `stale-planned` (still planned 5 revs later).
+Deferred: `orphan-edge` (validation already forbids it) and `unpinned-after-human-edit`.
 
 ## Views
 
@@ -107,9 +107,21 @@ Signal types in v0 (all deterministic, no model judgement):
 | What is happening | `map.yaml` + `proposals/` | current map; changed nodes highlighted; pending proposals as an overlay with Apply / Reject |
 | Where it might go wrong | `signals.json` | badges on nodes, sorted list by severity |
 
+## Decisions (locked)
+
+1. `role` is a closed vocabulary per kind (see `core/src/types.ts`).
+2. Cites store a content hash of the cited lines, trailing whitespace ignored. Filled in when a change is applied.
+3. Every change needs human approval. There is no auto-apply.
+4. `pins.yaml` and `locked_labels` are human-only; no agent-facing path writes them.
+
+## Behaviour notes (implemented in core)
+
+- A proposal must name the current `base_rev` or it is refused (`STALE`). Stale pending proposals can be rebased if their ops still apply.
+- A proposal is dry-run against the map and pins when created, so a bad one is refused at once and never saved.
+- Removing a node that still has edges or group membership is refused; the blockers are listed.
+- History replays from a full snapshot at rev 0, so any past rev can be rebuilt and diffed.
+
 ## Open questions
 
-1. Is `role` a closed set per kind or free text with a default style?
-2. Do `cites` store a commit or a content hash? A hash survives rebases.
-3. Can `auto` apply ops that touch no pinned node, or is every change human-gated?
-4. Does sequence/state need a different node model, or can `kind` select a sub-schema as archify does?
+1. Do sequence/state need a different node model, or can `kind` select a sub-schema as archify does?
+2. Symlinked cite paths inside the repo are not resolved or blocked yet.

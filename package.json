@@ -1,0 +1,13 @@
+{
+  "name": "design-loop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test core/test/*.test.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": { "yaml": "2.8.1" },
+  "devDependencies": { "@types/node": "24.3.0", "typescript": "5.9.2" }
+}

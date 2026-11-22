@@ -6,7 +6,7 @@ The agent proposes changes to a typed map of your system. You see what happened,
 happening, and where it might go wrong. Nothing changes until you apply it, and anything
 you place by hand stays where you put it.
 
-**Status: early design. Nothing is implemented yet.** The schema draft is in
+**Status: early. `core/` (schema, propose/apply, history, pins, drift signals) is implemented and tested. MCP server, CLI and viewer are not built yet.** The schema draft is in
 [`schema/design-map-v0.md`](schema/design-map-v0.md).
 
 ## How it works
