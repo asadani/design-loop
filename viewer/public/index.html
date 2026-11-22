@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>design-loop</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1 id="title">design-loop</h1>
+  <span id="meta" class="mono"></span>
+  <span id="live" class="mono">connecting…</span>
+</header>
+<div id="banner" hidden></div>
+<main>
+  <aside id="timeline" aria-label="What happened"></aside>
+  <section id="canvas-wrap" aria-label="What is happening"><svg id="canvas" role="img" aria-label="Design map"></svg></section>
+  <aside id="side" aria-label="Pending changes and risks"></aside>
+</main>
+<div id="toast" role="status" hidden></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

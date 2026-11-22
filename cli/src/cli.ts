@@ -32,6 +32,8 @@ Decide (human only: needs an interactive terminal, asks you to confirm):
   pin <node> <x> <y> | unpin <node>
   lock <node> | unlock <node>  forbid / allow the agent renaming a node
 
+  view                         open the live viewer (prints a private link)
+
 Hooks:
   hook stop                    Claude Code Stop hook: refresh signals; block once if the map has drifted
 `;
@@ -171,6 +173,18 @@ export async function run(argv: string[], env: Env): Promise<number> {
         }
         savePins(root, pins);
         out("ok\n");
+        return 0;
+      }
+      case "view": {
+        // Human only: the session token is shown on this terminal and nowhere else.
+        if (!env.tty) { env.err('refused: "view" needs an interactive terminal (the link carries a decision token).\n'); return 1; }
+        loadMap(root);
+        const { startViewer } = await import("../../viewer/src/server.ts");
+        const port = Number(process.env.PORT ?? 0);
+        const v = await startViewer(root, (await import("node:crypto")).randomBytes(24).toString("hex"), Number.isInteger(port) ? port : 0);
+        out(`design-loop viewer: ${v.url}\nCtrl-C to stop. Anyone with this link can apply or reject changes.\n`);
+        await new Promise<void>((done) => { process.once("SIGINT", done); process.once("SIGTERM", done); });
+        await v.close();
         return 0;
       }
       case "hook": {

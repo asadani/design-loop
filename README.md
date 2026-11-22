@@ -6,7 +6,7 @@ The agent proposes changes to a typed map of your system. You see what happened,
 happening, and where it might go wrong. Nothing changes until you apply it, and anything
 you place by hand stays where you put it.
 
-**Status: early. `core/` (schema, propose/apply, history, pins, drift signals) is implemented and tested. The MCP server is implemented and tested. CLI and viewer are not built yet.** The schema draft is in
+**Status: early. `core/` (schema, propose/apply, history, pins, drift signals) is implemented and tested. MCP server, CLI and viewer are implemented and tested. Not yet tried with a long real agent session.** The schema draft is in
 [`schema/design-map-v0.md`](schema/design-map-v0.md).
 
 ## How it works
@@ -31,7 +31,26 @@ claude mcp add design-loop -- node /path/to/design-loop/mcp/src/bin.ts /path/to/
 
 Tools: `map_status`, `map_read`, `map_propose`, `map_history`, `map_diff`, `map_explain_node`.
 There is deliberately no tool to apply or reject a proposal, or to touch pins. Those are human
-decisions, made in the CLI or viewer (not built yet).
+decisions, made in the CLI or the viewer.
+
+## Use the CLI and viewer
+
+```bash
+node cli/src/bin.ts init architecture "My system"   # in your repo, from a terminal
+node cli/src/bin.ts view                            # prints a private link; Ctrl-C to stop
+node cli/src/bin.ts status | review <id> | apply <id> | reject <id> | pin <node> <x> <y> | lock <node>
+```
+
+Decision commands (`init`, `apply`, `reject`, `rebase`, `pin`, `lock`, `view`) refuse to run unless
+both stdin and stdout are a terminal, so an agent's shell cannot approve its own changes. The viewer
+binds to 127.0.0.1, needs a random per-session token that is only printed to your terminal, checks
+Host and Origin, and renders agent-written text with `textContent` under a strict CSP.
+
+Optional Stop hook (refreshes drift signals each turn; blocks once if code the map cites has changed):
+
+```json
+{ "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "node /path/to/design-loop/cli/src/bin.ts hook stop" } ] } ] } }
+```
 
 ## Layout
 
