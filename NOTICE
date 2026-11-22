@@ -1,0 +1,6 @@
+design-loop includes material derived from diagram-design
+(https://github.com/cathrynlavery/diagram-design), Copyright (c) 2025 Cathryn Lavery,
+used under the MIT License (see LICENSE-UPSTREAM).
+
+Derived files: everything under styles/ and the geometry, contrast and render
+checks under scripts/. The rest of the repository is original work.
