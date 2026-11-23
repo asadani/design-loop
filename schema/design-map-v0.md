@@ -124,4 +124,4 @@ Deferred: `orphan-edge` (validation already forbids it) and `unpinned-after-huma
 ## Open questions
 
 1. Do sequence/state need a different node model, or can `kind` select a sub-schema as archify does?
-2. Symlinked cite paths inside the repo are not resolved or blocked yet.
+2. Cites of directories hash the file listing (non-test, non-hidden files), not contents. Symlinked cite targets count as missing.

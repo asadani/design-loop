@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
-import { apply, computeSignals, DesignError, diffRevs, initMap, listHistory, loadMap, loadPins, mapAtRev, paths, propose, reject, rebase, savePins, status, validateMap } from "../src/index.ts";
+import { apply, citeHash, computeSignals, DesignError, diffRevs, initMap, listHistory, loadMap, loadPins, mapAtRev, paths, propose, reject, rebase, savePins, status, validateMap } from "../src/index.ts";
 import type { Op } from "../src/index.ts";
 
 function repo() {
@@ -150,4 +150,33 @@ test("validateMap rejects unsafe cite paths", () => {
   assert.match(validateMap(m).join("\n"), /relative and inside the repo/);
   m.nodes[0].cites = [{ path: "/etc/passwd" }];
   assert.match(validateMap(m).join("\n"), /relative and inside the repo/);
+});
+
+test("directory cites hash the file listing: structure drift fires, edits and tests do not", () => {
+  const root = repo();
+  mkdirSync(join(root, "internal/store"), { recursive: true });
+  writeFileSync(join(root, "internal/store/a.go"), "package a\n");
+  const ops: Op[] = [{ op: "add_node", node: { id: "store", label: "Store", role: "backend", status: "stable", cites: [{ path: "internal/store" }] } }];
+  apply(root, propose(root, { base_rev: 0, source: src("seed"), ops }).id);
+  assert.match(loadMap(root).nodes[0].cites![0].hash!, /^sha256:/);
+  assert.deepEqual(computeSignals(root), [], "freshly anchored: no drift");
+  writeFileSync(join(root, "internal/store/a.go"), "package a\n// edited\n");
+  writeFileSync(join(root, "internal/store/a_test.go"), "package a\n");
+  mkdirSync(join(root, "internal/store/testdata")); writeFileSync(join(root, "internal/store/testdata/x"), "x");
+  writeFileSync(join(root, "internal/store/.hidden"), "x");
+  assert.deepEqual(computeSignals(root), [], "content edits, tests, testdata and dotfiles are not drift");
+  writeFileSync(join(root, "internal/store/b.go"), "package a\n");
+  assert.deepEqual(computeSignals(root).map((s) => s.type), ["cite-moved"], "a new source file is drift");
+  rmSync(join(root, "internal/store"), { recursive: true });
+  assert.deepEqual(computeSignals(root).map((s) => s.type), ["cite-missing"]);
+  rmSync(root, { recursive: true });
+});
+
+test("symlinked cite targets are treated as missing, never followed", () => {
+  const root = repo();
+  mkdirSync(join(root, "src")); writeFileSync(join(root, "src/real.ts"), "x\n");
+  symlinkSync("/etc/hosts", join(root, "src/link.ts"));
+  assert.equal(citeHash(root, { path: "src/link.ts" }), null);
+  assert.match(citeHash(root, { path: "src/real.ts" })!, /^sha256:/);
+  rmSync(root, { recursive: true });
 });

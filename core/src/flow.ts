@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DesignError } from "./types.ts";
 import type { Cite, HistoryEntry, MapDoc, Op, Proposal, Source } from "./types.ts";
@@ -8,10 +8,32 @@ import { diffMaps } from "./diff.ts";
 import type { MapDiff } from "./diff.ts";
 import { appendHistory, listHistory, listProposals, loadMap, loadPins, loadProposal, nextProposalId, saveMap, saveProposal } from "./store.ts";
 
-/** Hash of a cited region. Trailing whitespace is ignored so formatters don't cause drift. */
+const SKIP_DIR = /^(\.|node_modules$|vendor$|testdata$|__tests?__$|tests?$)/;
+const SKIP_FILE = /(^\.|_test\.|\.test\.|\.spec\.|Test\.php$)/;
+
+/** Sorted relative paths of non-test, non-hidden files under a directory. Symlinks are never followed. */
+function listTree(abs: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(join(abs, rel), { withFileTypes: true })) {
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) { if (!SKIP_DIR.test(e.name)) out.push(...listTree(abs, r)); }
+    else if (e.isFile() && !SKIP_FILE.test(e.name)) out.push(r);
+  }
+  return out.sort();
+}
+
+/**
+ * Hash of a cited region. A file hashes its (trailing-whitespace-normalised) lines. A directory
+ * hashes its file LISTING, not contents: architecture drift is files appearing, vanishing or moving,
+ * and hashing contents would flag a large package on every edit.
+ */
 export function citeHash(root: string, c: Cite): string | null {
   const f = join(root, c.path);
-  if (!existsSync(f)) return null;
+  if (!existsSync(f) || lstatSync(f).isSymbolicLink()) return null;
+  if (statSync(f).isDirectory()) {
+    return "sha256:" + createHash("sha256").update(listTree(f).join("\n")).digest("hex").slice(0, 16);
+  }
   let lines = readFileSync(f, "utf8").split("\n").map((l) => l.replace(/\s+$/, ""));
   if (c.lines) lines = lines.slice(c.lines[0] - 1, c.lines[1]);
   return "sha256:" + createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16);
