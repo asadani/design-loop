@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { stringify } from "yaml";
 import { apply, listProposals, loadMap, propose } from "../../core/src/index.ts";
 import type { Op } from "../../core/src/index.ts";
-import { ALLOWED_BUILTIN, auditTranscript, claudeArgs, finishRun, MCP_TOOLS, prepareRun, runScripted, startAutoApprover } from "../harness.ts";
+import { ALLOWED_BUILTIN, auditTranscript, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, runScripted, startAutoApprover } from "../harness.ts";
 import type { RunRecord, Step } from "../harness.ts";
 import { COLD_START_PROMPT } from "../prompt.ts";
 import { loadGolden } from "../score.ts";
@@ -119,7 +119,7 @@ test("a tainted audit marks the run tainted", async () => {
   const t = fixture();
   const p = prepareRun({ stripped: t.stripped, repo: "fake", runId: "taint", ...t.opts });
   const rec = finishRun({ repo: "fake", runId: "taint", label: "x", agent: "claude", goldenFile: t.goldenFile, paths: p, approver: { applied: 0, rebased: 0, rejected: 0, reasons: [] }, wallMs: 1,
-    audit: { toolCalls: {}, toolErrors: {}, outside: ["Read: /x/golden/gopass.yaml"], disallowed: [] } });
+    audit: { toolCalls: {}, toolErrors: {}, outside: ["Read: /x/golden/gopass.yaml"], disallowed: [], grantedExtra: [], deniedAttempts: [] } });
   assert.equal(rec.tainted, true);
   assert.match(rec.taintReasons[0], /outside working copy/);
   t.done();
@@ -162,11 +162,61 @@ test("report: tainted runs are counted but excluded from the means", () => {
   const mk = (recall: number, tainted: boolean): RunRecord => ({
     repo: "gopass", runId: String(Math.random()), label: "cold", agent: "claude", promptHash: "abc", commit: "x", finished: "", wallMs: 1, tainted, taintReasons: [],
     score: { repo: "gopass", nodes: { golden: 3, citable: 3, matched: 0, recall, missed: [], byName: [] }, edges: { golden: 2, scored: 2, hit: 0, reversed: 0, recall: recall / 2, evaluable: 0, missed: [] }, extras: { count: 4, ids: [] }, cites: { total: 1, valid: 1, validity: 1, groundedNodes: 1, nodes: 1 } },
-    final: { rev: 3, nodes: 3, edges: 2, signals: {} }, approver: { applied: 3, rebased: 1, rejected: 0, reasons: [] }, audit: { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [], costUsd: 1.5 },
+    final: { rev: 3, nodes: 3, edges: 2, signals: {} }, approver: { applied: 3, rebased: 1, rejected: 0, reasons: [] }, audit: { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [], grantedExtra: [], deniedAttempts: [], costUsd: 1.5 },
   });
   const out = summarize([mk(0.5, false), mk(0.7, false), mk(0.99, true)]);
   assert.match(out, /\| gopass \/ cold \/ prompt abc \| 2\/1 \|/, "one cell for the setup, then 2 clean / 1 tainted");
   assert.match(out, /0\.60 \[0\.50-0\.70\]/, "tainted 0.99 is left out");
   assert.match(out, /\$4\.50/, "cost counts every run, tainted or not");
   assert.match(out, /read the spread/);
+});
+
+// Regression: a real run attempted Bash once; the sandbox refused it. That is the sandbox working, not a breach.
+test("audit: a REFUSED attempt is informational; a SUCCESSFUL one taints", () => {
+  const work = mkdtempSync(join(tmpdir(), "dl-audit2-"));
+  const use = (id: string, name: string, input: object) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
+  const res = (id: string, is_error: boolean, text: string) => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error, content: text }] } });
+  const init = JSON.stringify({ type: "system", subtype: "init", model: "m", cwd: work, tools: [...ALLOWED_BUILTIN, ...MCP_TOOLS] });
+  const refused = auditTranscript([
+    init,
+    use("1", "Bash", { command: "ls" }), res("1", true, "<tool_use_error>Error: No such tool available: Bash. Bash is disabled for this session</tool_use_error>"),
+    use("2", "Read", { file_path: "/Users/someone/golden/gopass.yaml" }), res("2", true, "permission denied"),
+  ]);
+  assert.deepEqual(refused.disallowed, []); assert.deepEqual(refused.outside, []); assert.deepEqual(refused.grantedExtra, []);
+  assert.deepEqual(refused.deniedAttempts, ["Bash", "Read: /Users/someone/golden/gopass.yaml"]);
+  assert.equal(refused.toolCalls.Bash, 1, "the attempt is still counted");
+
+  const breached = auditTranscript([
+    init,
+    use("1", "Bash", { command: "ls" }), res("1", false, "file1\nfile2"),                        // it actually ran
+    use("2", "Read", { file_path: "/Users/someone/golden/gopass.yaml" }), res("2", false, "nodes:"), // it actually read
+    use("3", "Read", { file_path: "/etc/hosts" }),                                                   // no result: cannot prove refusal
+  ]);
+  assert.deepEqual(breached.disallowed, ["Bash"]);
+  assert.equal(breached.outside.length, 2);
+
+  const leaky = auditTranscript([JSON.stringify({ type: "system", subtype: "init", cwd: work, tools: ["Read", "Bash", "mcp__design-loop__map_read"] })]);
+  assert.deepEqual(leaky.grantedExtra, ["Bash"], "a session started with Bash is a sandbox failure even if never used");
+  rmSync(work, { recursive: true });
+});
+
+test("reauditRun recomputes taint from the stored transcript and keeps the score", () => {
+  const t = fixture();
+  const p = prepareRun({ stripped: t.stripped, repo: "fake", runId: "re", ...t.opts });
+  finishRun({ repo: "fake", runId: "re", label: "x", agent: "claude", goldenFile: t.goldenFile, paths: p, approver: { applied: 0, rebased: 0, rejected: 0, reasons: [] }, wallMs: 1,
+    audit: { toolCalls: {}, toolErrors: {}, outside: [], disallowed: ["Bash"], grantedExtra: [], deniedAttempts: [] } });   // wrongly tainted, like the old audit
+  const lines = [
+    JSON.stringify({ type: "system", subtype: "init", model: "m", cwd: p.work, tools: [...ALLOWED_BUILTIN, ...MCP_TOOLS] }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "1", name: "Bash", input: { command: "ls" } }] } }),
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "1", is_error: true, content: "No such tool available: Bash" }] } }),
+    JSON.stringify({ type: "result", total_cost_usd: 0.1, num_turns: 3, duration_ms: 5, session_id: "s", is_error: false }),
+  ];
+  writeFileSync(join(p.out, "transcript.jsonl"), lines.join("\n"));
+  const before = JSON.parse(readFileSync(join(p.out, "result.json"), "utf8"));
+  assert.equal(before.tainted, true);
+  const after = reauditRun(p.out);
+  assert.equal(after.tainted, false);
+  assert.deepEqual(after.audit!.deniedAttempts, ["Bash"]);
+  assert.deepEqual(after.score, before.score, "scores are not recomputed");
+  t.done();
 });

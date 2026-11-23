@@ -146,10 +146,14 @@ export async function runClaude(o: { work: string; out: string; budgetUsd: numbe
 export interface Audit {
   toolCalls: Record<string, number>;
   toolErrors: Record<string, number>;
-  /** Paths the agent touched outside its working copy. Any entry means the run is tainted. */
+  /** Reads outside the working copy that actually SUCCEEDED (or never got a result). Any entry taints the run. */
   outside: string[];
-  /** Tools used that this setup never granted. Any entry means the sandbox did not hold. */
+  /** Ungranted tools that actually ran (or never got a result). Any entry taints the run. */
   disallowed: string[];
+  /** Tools the session was started with that are not on the allowlist: the sandbox itself failed. Taints the run. */
+  grantedExtra: string[];
+  /** Attempts the sandbox refused (e.g. "No such tool available: Bash"). Informational: nothing was read or run. */
+  deniedAttempts: string[];
   model?: string;
   costUsd?: number; turns?: number; durationMs?: number; sessionId?: string; isError?: boolean;
 }
@@ -170,33 +174,57 @@ function real(p: string): string {
   }
 }
 
-export function auditTranscript(lines: string[], work: string): Audit {
-  const w = real(work);
-  const a: Audit = { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [] };
-  const inside = (p: string) => { const r = real(isAbsolute(p) ? p : join(w, p)); return r === w || r.startsWith(w + "/"); };
+/**
+ * A model may TRY a tool it was not given; the harness refuses and the transcript shows an errored tool_use. That is
+ * the sandbox working, not a breach. Only calls that succeeded (or have no recorded result) count against the run.
+ * `work` defaults to the cwd recorded in the transcript's init event.
+ */
+export function auditTranscript(lines: string[], work?: string): Audit {
+  const a: Audit = { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [], grantedExtra: [], deniedAttempts: [] };
+  const events: any[] = [];
+  for (const line of lines) { try { events.push(JSON.parse(line)); } catch { /* skip junk lines */ } }
+  const init = events.find((m) => m.type === "system" && m.subtype === "init");
+  const root = real(work ?? init?.cwd ?? ".");
+  const inside = (p: string) => { const r = real(isAbsolute(p) ? p : join(root, p)); return r === root || r.startsWith(root + "/"); };
   const allowed = new Set([...ALLOWED_BUILTIN, ...MCP_TOOLS]);
-  const idToName = new Map<string, string>();
-  for (const line of lines) {
-    let m: any; try { m = JSON.parse(line); } catch { continue; }
-    if (m.type === "system" && m.subtype === "init") a.model = m.model;
+  if (init) { a.model = init.model; a.grantedExtra = (init.tools ?? []).filter((t: string) => !allowed.has(t)); }
+
+  const pending = new Map<string, { name: string; outside: string[]; disallowed: boolean }>();
+  for (const m of events) {
     if (m.type === "result") { a.costUsd = m.total_cost_usd; a.turns = m.num_turns; a.durationMs = m.duration_ms; a.sessionId = m.session_id; a.isError = m.is_error; }
     for (const c of m.message?.content ?? []) {
       if (c.type === "tool_use") {
         a.toolCalls[c.name] = (a.toolCalls[c.name] ?? 0) + 1;
-        idToName.set(c.id, c.name);
-        if (!allowed.has(c.name)) a.disallowed.push(c.name);
         const i = c.input ?? {};
+        const outside: string[] = [];
         for (const p of [i.file_path, i.path, i.notebook_path, typeof i.pattern === "string" && isAbsolute(i.pattern) ? i.pattern : undefined]) {
-          if (typeof p === "string" && p && !inside(p)) a.outside.push(`${c.name}: ${p}`);
+          if (typeof p === "string" && p && !inside(p)) outside.push(`${c.name}: ${p}`);
         }
-        if (typeof i.pattern === "string" && i.pattern.split("/").includes("..")) a.outside.push(`${c.name}: ${i.pattern}`);
+        if (typeof i.pattern === "string" && i.pattern.split("/").includes("..")) outside.push(`${c.name}: ${i.pattern}`);
+        pending.set(c.id, { name: c.name, outside, disallowed: !allowed.has(c.name) });
       }
-      if (c.type === "tool_result" && c.is_error) {
-        const txt = typeof c.content === "string" ? c.content : JSON.stringify(c.content);
-        const code = /"code":\s*"?([A-Z_]+)/.exec(txt)?.[1] ?? /\\"code\\":\s*\\"([A-Z_]+)/.exec(txt)?.[1] ?? "OTHER";
-        a.toolErrors[code] = (a.toolErrors[code] ?? 0) + 1;
+      if (c.type === "tool_result") {
+        const call = pending.get(c.tool_use_id);
+        if (call) {
+          pending.delete(c.tool_use_id);
+          if (c.is_error) {
+            if (call.disallowed || call.outside.length) a.deniedAttempts.push(call.disallowed ? call.name : call.outside[0]);
+          } else {
+            if (call.disallowed) a.disallowed.push(call.name);
+            a.outside.push(...call.outside);
+          }
+        }
+        if (c.is_error) {
+          const txt = typeof c.content === "string" ? c.content : JSON.stringify(c.content);
+          const code = /"code":\s*"?([A-Z_]+)/.exec(txt)?.[1] ?? /\\"code\\":\s*\\"([A-Z_]+)/.exec(txt)?.[1] ?? "OTHER";
+          a.toolErrors[code] = (a.toolErrors[code] ?? 0) + 1;
+        }
       }
     }
+  }
+  for (const call of pending.values()) {          // no recorded result: cannot prove it was refused, so count it
+    if (call.disallowed) a.disallowed.push(call.name);
+    a.outside.push(...call.outside);
   }
   return a;
 }
@@ -216,7 +244,8 @@ export function finishRun(o: { repo: string; runId: string; label: string; agent
   for (const s of computeSignals(o.paths.work, loadMap(o.paths.work))) signals[s.type] = (signals[s.type] ?? 0) + 1;
   const taintReasons = [
     ...(o.audit?.outside.length ? [`read outside working copy: ${o.audit.outside.slice(0, 3).join("; ")}`] : []),
-    ...(o.audit?.disallowed.length ? [`used tools never granted: ${[...new Set(o.audit.disallowed)].join(", ")}`] : []),
+    ...(o.audit?.disallowed.length ? [`ran tools never granted: ${[...new Set(o.audit.disallowed)].join(", ")}`] : []),
+    ...(o.audit?.grantedExtra.length ? [`session was started with tools beyond the allowlist: ${o.audit.grantedExtra.join(", ")}`] : []),
     ...(o.timedOut ? ["timed out"] : []),
   ];
   const rec: RunRecord = {
@@ -231,3 +260,19 @@ export function finishRun(o: { repo: string; runId: string; label: string; agent
 }
 
 export const readResult = (file: string): RunRecord => JSON.parse(readFileSync(file, "utf8"));
+
+/** Recompute the audit of a stored run from its transcript (after the audit logic changes). Scores are untouched. */
+export function reauditRun(dir: string): RunRecord {
+  const file = join(dir, "result.json");
+  const rec = readResult(file);
+  const audit = auditTranscript(readFileSync(join(dir, "transcript.jsonl"), "utf8").split("\n"));
+  const taintReasons = [
+    ...(audit.outside.length ? [`read outside working copy: ${audit.outside.slice(0, 3).join("; ")}`] : []),
+    ...(audit.disallowed.length ? [`ran tools never granted: ${[...new Set(audit.disallowed)].join(", ")}`] : []),
+    ...(audit.grantedExtra.length ? [`session was started with tools beyond the allowlist: ${audit.grantedExtra.join(", ")}`] : []),
+    ...(rec.timedOut ? ["timed out"] : []),
+  ];
+  const next: RunRecord = { ...rec, audit, tainted: taintReasons.length > 0, taintReasons };
+  writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+  return next;
+}
