@@ -7,7 +7,7 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "test": "node --test core/test/*.test.ts mcp/test/*.test.ts cli/test/*.test.ts viewer/test/*.test.ts",
+    "test": "node --test core/test/*.test.ts mcp/test/*.test.ts cli/test/*.test.ts viewer/test/*.test.ts bench/test/*.test.ts",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {

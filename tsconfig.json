@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["core/**/*.ts", "mcp/**/*.ts", "cli/**/*.ts"]
+  "include": ["core/**/*.ts", "mcp/**/*.ts", "cli/**/*.ts", "bench/**/*.ts"]
 }
