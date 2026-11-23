@@ -1,9 +1,9 @@
 :root {
   --paper: #f5f5f5; --surface: #ffffff; --ink: #2d3142; --muted: #4f5d75; --rule: #d9dbe1; --accent: #bf4520;
-  --warn: #8a6d00; --font-sans: 'Geist', system-ui, sans-serif; --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --warn: #8a6d00; --new: #0e7c8a; --font-sans: 'Geist', system-ui, sans-serif; --font-mono: 'Geist Mono', ui-monospace, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --paper: #1b1d27; --surface: #23263a; --ink: #e8e9ef; --muted: #9aa5bd; --rule: #3a3e55; --accent: #e8734a; --warn: #d9b84a; }
+  :root:not([data-theme="light"]) { --paper: #1b1d27; --surface: #23263a; --ink: #e8e9ef; --muted: #9aa5bd; --rule: #3a3e55; --accent: #e8734a; --warn: #d9b84a; --new: #4fc7d6; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -17,8 +17,15 @@ h1 { font-size: 16px; margin: 0; font-weight: 600; }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px 1fr 340px; }
 aside { overflow: auto; padding: 14px 16px; border-right: 1px solid var(--rule); }
 #side { border-right: 0; border-left: 1px solid var(--rule); }
-#canvas-wrap { min-width: 0; overflow: auto; }
-#canvas { width: 100%; height: 100%; display: block; }
+#canvas-wrap { min-width: 0; position: relative; overflow: hidden; }
+#scroller { position: absolute; inset: 0; overflow: auto; cursor: grab; }
+#scroller.panning { cursor: grabbing; user-select: none; }
+#canvas { display: block; }
+#tools { position: absolute; top: 10px; right: 14px; display: flex; gap: 4px; }
+#tools button { min-width: 32px; background: var(--surface); }
+#legend { position: absolute; left: 14px; bottom: 10px; display: flex; gap: 14px; flex-wrap: wrap; background: var(--paper); border: 1px solid var(--rule); border-radius: 3px; padding: 4px 10px; }
+#legend i { display: inline-block; width: 11px; height: 11px; border: 2px solid; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+#legend .k-new { border-color: var(--new); } #legend .k-pending { border-color: var(--accent); } #legend .k-planned { border: 2px dashed var(--muted); }
 h2 { font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 18px 0 8px; }
 h2:first-child { margin-top: 0; }
 button { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 3px 9px; cursor: pointer; }
@@ -37,12 +44,13 @@ button:focus-visible, .rev:focus-visible { outline: 2px solid var(--accent); out
 .empty { color: var(--muted); font-style: italic; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 8px 14px; border-radius: 4px; max-width: 70ch; }
 /* canvas */
-.edge { fill: none; stroke: var(--muted); stroke-width: 1.2; } .edge.added { stroke: var(--accent); } .edge.removed { stroke-dasharray: 3 3; opacity: .55; }
+.edge { fill: none; stroke: var(--muted); stroke-width: 1.2; } .edge.added { stroke: var(--accent); } .edge.new { stroke: var(--new); stroke-width: 2; } .edge.removed { stroke-dasharray: 3 3; opacity: .55; }
 .edge-label { font: 11px var(--font-mono); fill: var(--muted); paint-order: stroke; stroke: var(--paper); stroke-width: 4px; }
 .node rect.box { fill: var(--surface); stroke: var(--ink); stroke-width: 1.2; }
 .node.planned rect.box { stroke-dasharray: 4 3; } .node.in-progress rect.box { stroke: var(--accent); }
 .node.deprecated { opacity: .55; } .node.deprecated .label { text-decoration: line-through; }
 .node.added rect.box, .node.changed rect.box { stroke: var(--accent); stroke-width: 2; } .node.removed { opacity: .5; } .node.removed rect.box { stroke-dasharray: 3 3; }
+.node.new rect.box { stroke: var(--new); stroke-width: 2.5; } .node .tag.fresh { fill: var(--new); font-weight: 700; }
 .node.sel rect.box { stroke-width: 2.5; } .node { cursor: grab; } .node.dragging { cursor: grabbing; } .readonly .node { cursor: default; }
 .node .label { font: 500 13px var(--font-sans); fill: var(--ink); } .node .role, .node .tag { font: 10px var(--font-mono); fill: var(--muted); }
 .node .tag.diff { fill: var(--accent); font-weight: 600; }

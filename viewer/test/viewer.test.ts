@@ -7,7 +7,7 @@ import { initMap, loadMap, loadPins, propose, listProposals } from "../../core/s
 import type { Op } from "../../core/src/index.ts";
 import { startViewer } from "../src/server.ts";
 // @ts-expect-error plain JS module shared with the browser
-import { layout, route, NODE_W, NODE_H } from "../public/layout.js";
+import { layout, route, clampZoom, fitZoom, NODE_W, NODE_H } from "../public/layout.js";
 
 const TOKEN = "t".repeat(48);
 const ops: Op[] = [
@@ -132,4 +132,23 @@ test("route: straight when level, rounded elbow otherwise, loops around when bac
   assert.match(route(a, low).d, /Q/);
   assert.match(route(a, back).d, /V.*H.*V/);
   assert.ok(NODE_W > 0 && NODE_H > 0);
+});
+
+test("zoom: clamped, never enlarges past 100% when fitting, and survives bad input", () => {
+  assert.equal(clampZoom(99), 3); assert.equal(clampZoom(0.01), 0.25); assert.equal(clampZoom(NaN), 1); assert.equal(clampZoom(1.5), 1.5);
+  assert.equal(fitZoom(400, 300, 900, 700), 1, "small maps stay at natural size");
+  assert.ok(Math.abs(fitZoom(2300, 800, 900, 700) - 900 / 2300) < 1e-9, "wide maps shrink to the box width");
+  assert.ok(Math.abs(fitZoom(800, 2300, 900, 700) - 700 / 2300) < 1e-9, "tall maps shrink to the box height");
+  assert.equal(fitZoom(0, 0, 900, 700), 1); assert.equal(fitZoom(500, 500, 0, 0), 1);
+  assert.equal(fitZoom(100000, 100000, 900, 700), 0.25, "never below the minimum zoom");
+});
+
+test("page ships the zoom controls and the new-change styling", async () => {
+  const t = await setup();
+  const html = await (await t.call("/", { token: null })).text();
+  for (const id of ["z-in", "z-out", "z-fit", "z-reset", "scroller", "legend"]) assert.match(html, new RegExp(`id="${id}"`), id);
+  const css = await (await t.call("/style.css", { token: null })).text();
+  assert.match(css, /--new:/); assert.match(css, /\.node\.new rect\.box/); assert.match(css, /\.edge\.new/);
+  assert.doesNotMatch(css, /#canvas \{ width: 100%/, "the map must not be force-fitted to the window");
+  await t.done();
 });

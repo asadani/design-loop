@@ -50,3 +50,11 @@ export function route(a, b) {
   const mid = (y1 + y2) / 2;
   return { d: `M${x1},${y1} V${mid} H${x2} V${y2}`, lx: (x1 + x2) / 2 + 6, ly: mid - 4, anchor: "start" };
 }
+
+export const ZOOM_MIN = 0.25, ZOOM_MAX = 3;
+export const clampZoom = (z) => (Number.isFinite(z) ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) : 1);
+/** Zoom that makes a w x h drawing fit a box, never enlarging past 100% so small maps stay crisp. */
+export function fitZoom(w, h, boxW, boxH) {
+  if (!(w > 0) || !(h > 0) || !(boxW > 0) || !(boxH > 0)) return 1;
+  return clampZoom(Math.min(1, boxW / w, boxH / h));
+}

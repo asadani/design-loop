@@ -1,4 +1,4 @@
-import { layout, route, NODE_W, NODE_H, PAD } from "/layout.js";
+import { layout, route, clampZoom, fitZoom, NODE_W, NODE_H } from "/layout.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
@@ -35,7 +35,9 @@ function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = fals
 const act = (path, body) => async () => { try { await api(path, body); await load(); } catch (e) { toast(e.message); } };
 
 let state = null;
-const view = { rev: null, preview: null, selected: null };   // rev: null = current
+const view = { rev: null, preview: null, selected: null, zoom: 1 };   // rev: null = current
+try { const z = Number(sessionStorage.getItem("dl-zoom")); if (z) view.zoom = clampZoom(z); } catch {}
+let drawn = { w: 600, h: 300 };
 let shown = null;                                            // { map, diff, readonly }
 
 async function load() {
@@ -46,6 +48,7 @@ async function load() {
   try {
     if (view.preview !== null) { const r = await api(`/api/preview?id=${view.preview}`); shown = { map: r.map, diff: r.diff, readonly: true, ghosts: state.map }; }
     else if (view.rev !== null) { const r = await api(`/api/rev?n=${view.rev}`); shown = { map: r.map, diff: r.diff, readonly: true, ghosts: view.rev > 0 ? await api(`/api/rev?n=${view.rev - 1}`).then((x) => x.map) : null }; }
+    else if (state.map.rev > 0) { const r = await api(`/api/rev?n=${state.map.rev}`); shown.latest = r.diff; }
   } catch (e) { toast(e.message); view.preview = null; view.rev = null; shown = { map: state.map, diff: null, readonly: false, ghosts: null }; }
   render();
 }
@@ -128,10 +131,18 @@ function renderCanvas() {
   const added = new Set(shown.diff ? [...shown.diff.nodes.added] : []), changed = new Set(shown.diff ? shown.diff.nodes.changed.map((c) => c.id) : []);
   const removed = new Set(shown.diff ? shown.diff.nodes.removed : []);
   const addedE = new Set(shown.diff?.edges.added ?? []), removedE = new Set(shown.diff?.edges.removed ?? []);
+  // "new" = changed in the latest applied revision (only when looking at the live map; previews use the accent colour)
+  // If the latest rev added every node (e.g. the first import), "new" says nothing, so skip it.
+  const L0 = shown.diff ? null : shown.latest;
+  const L = L0 && !(L0.nodes.added.length >= cur.nodes.length && cur.nodes.length > 0) ? L0 : null;
+  const newN = new Set(L ? [...L.nodes.added, ...L.nodes.changed.map((c) => c.id)] : []);
+  const newE = new Set(L ? [...L.edges.added, ...L.edges.changed.map((c) => c.id)] : []);
   const nodes = [...cur.nodes, ...(ghosts ? ghosts.nodes.filter((n) => removed.has(n.id)) : [])];
   const edges = [...cur.edges, ...(ghosts ? ghosts.edges.filter((e) => removedE.has(e.id)) : [])];
   const { pos, width, height } = layout(nodes, edges, state.pins.pins);
-  svg.setAttribute("viewBox", `0 0 ${Math.max(width, 600)} ${Math.max(height, 300)}`);
+  drawn = { w: Math.max(width, 600), h: Math.max(height, 300) };
+  svg.setAttribute("viewBox", `0 0 ${drawn.w} ${drawn.h}`);
+  applyZoom();
   svg.classList.toggle("readonly", shown.readonly);
   const sev = {}; for (const g of state.signals) if (!sev[g.node] || g.severity === "high") sev[g.node] = g.severity;
 
@@ -143,23 +154,73 @@ function renderCanvas() {
   });
   const edgeEls = edges.filter((e) => pos[e.from] && pos[e.to]).map((e) => {
     const r = route(pos[e.from], pos[e.to]);
-    return s("g", {}, s("path", { class: "edge" + (addedE.has(e.id) ? " added" : removedE.has(e.id) ? " removed" : ""), d: r.d, "marker-end": "url(#arrow)" }), e.label ? s("text", { class: "edge-label", x: r.lx, y: r.ly, "text-anchor": r.anchor, text: e.label }) : null);
+    return s("g", {}, s("path", { class: "edge" + (addedE.has(e.id) ? " added" : removedE.has(e.id) ? " removed" : newE.has(e.id) ? " new" : ""), d: r.d, "marker-end": "url(#arrow)" }), e.label ? s("text", { class: "edge-label", x: r.lx, y: r.ly, "text-anchor": r.anchor, text: e.label }) : null);
   });
   const nodeEls = nodes.map((n) => {
     const p = pos[n.id], diffTag = added.has(n.id) ? "+" : changed.has(n.id) ? "~" : removed.has(n.id) ? "−" : "";
-    const g = s("g", { class: ["node", n.status ?? "", added.has(n.id) ? "added" : changed.has(n.id) ? "changed" : removed.has(n.id) ? "removed" : "", view.selected === n.id ? "sel" : ""].filter(Boolean).join(" "), transform: `translate(${p.x},${p.y})`, tabindex: "0", role: "button", "aria-label": `${n.label}, ${n.role}` },
+    const g = s("g", { class: ["node", n.status ?? "", added.has(n.id) ? "added" : changed.has(n.id) ? "changed" : removed.has(n.id) ? "removed" : newN.has(n.id) ? "new" : "", view.selected === n.id ? "sel" : ""].filter(Boolean).join(" "), transform: `translate(${p.x},${p.y})`, tabindex: "0", role: "button", "aria-label": `${n.label}, ${n.role}` },
       s("rect", { class: "box", width: NODE_W, height: NODE_H, rx: 4 }),
       s("text", { class: "role", x: 10, y: 17, text: n.role + (n.status ? " · " + n.status : "") }),
       s("text", { class: "label", x: 10, y: 40, text: n.label.length > 24 ? n.label.slice(0, 23) + "…" : n.label }),
       s("text", { class: "tag", x: 10, y: 57, text: [state.pins.locked_labels.includes(n.id) ? "label locked" : "", p.pinned ? "pinned" : ""].filter(Boolean).join(" · ") }),
       diffTag ? s("text", { class: "tag diff", x: NODE_W - 16, y: 17, text: diffTag }) : null,
+      newN.has(n.id) ? s("text", { class: "tag fresh", x: NODE_W - 32, y: 17, text: "new" }) : null,
       sev[n.id] ? s("g", { class: "badge " + sev[n.id], transform: `translate(${NODE_W},0)` }, s("circle", { r: 9 }), s("text", { y: 3.5, text: "!" })) : null);
     g.addEventListener("click", () => { view.selected = n.id; renderSide(); renderCanvas(); });
     if (!shown.readonly && !removed.has(n.id)) enableDrag(g, svg, n.id, p);
     return g;
   });
   svg.replaceChildren(defs, ...groups, ...edgeEls, ...nodeEls);
+  renderLegend(L, newN.size + newE.size);
 }
+
+function renderLegend(L, newCount) {
+  const k = (cls, text) => el("span", {}, el("i", { class: cls }), text);
+  const items = [];
+  if (shown.diff) items.push(k("k-pending", view.preview !== null ? "+ added  ~ changed  − removed (preview)" : "+ added  ~ changed  − removed in this rev"));
+  else if (newCount) items.push(k("k-new", `new in rev ${state.map.rev}`));
+  items.push(k("k-planned", "planned"));
+  $("legend").replaceChildren(...items);
+}
+
+// ---- zoom and pan. The map is shown at natural size and scrolls; it is never shrunk to fit unless asked.
+function applyZoom() {
+  const svg = $("canvas");
+  svg.setAttribute("width", String(Math.round(drawn.w * view.zoom)));
+  svg.setAttribute("height", String(Math.round(drawn.h * view.zoom)));
+  $("z-reset").textContent = `${Math.round(view.zoom * 100)}%`;
+}
+function setZoom(z, cx, cy) {
+  const sc = $("scroller"), old = view.zoom, next = clampZoom(z);
+  if (next === old) return;
+  const px = (sc.scrollLeft + cx) / old, py = (sc.scrollTop + cy) / old;   // content point under the cursor
+  view.zoom = next; try { sessionStorage.setItem("dl-zoom", String(next)); } catch {}
+  applyZoom();
+  sc.scrollLeft = px * next - cx; sc.scrollTop = py * next - cy;
+}
+(function wireView() {
+  const sc = $("scroller");
+  const mid = () => [sc.clientWidth / 2, sc.clientHeight / 2];
+  $("z-in").addEventListener("click", () => setZoom(view.zoom * 1.25, ...mid()));
+  $("z-out").addEventListener("click", () => setZoom(view.zoom / 1.25, ...mid()));
+  $("z-reset").addEventListener("click", () => setZoom(1, ...mid()));
+  $("z-fit").addEventListener("click", () => setZoom(fitZoom(drawn.w, drawn.h, sc.clientWidth - 24, sc.clientHeight - 24), ...mid()));
+  sc.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;               // plain scroll stays native scrolling
+    e.preventDefault();
+    const r = sc.getBoundingClientRect();
+    setZoom(view.zoom * Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  // drag the background to pan (nodes keep their own drag-to-pin)
+  sc.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest(".node")) return;
+    const x0 = e.clientX, y0 = e.clientY, l0 = sc.scrollLeft, t0 = sc.scrollTop;
+    sc.classList.add("panning"); sc.setPointerCapture(e.pointerId);
+    const mv = (m) => { sc.scrollLeft = l0 - (m.clientX - x0); sc.scrollTop = t0 - (m.clientY - y0); };
+    const up = () => { sc.classList.remove("panning"); sc.removeEventListener("pointermove", mv); sc.removeEventListener("pointerup", up); };
+    sc.addEventListener("pointermove", mv); sc.addEventListener("pointerup", up);
+  });
+})();
 
 // Drag a node; releasing it pins the position (the human channel the agent can never write).
 function enableDrag(g, svg, id, start) {

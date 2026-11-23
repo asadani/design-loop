@@ -15,7 +15,16 @@
 <div id="banner" hidden></div>
 <main>
   <aside id="timeline" aria-label="What happened"></aside>
-  <section id="canvas-wrap" aria-label="What is happening"><svg id="canvas" role="img" aria-label="Design map"></svg></section>
+  <section id="canvas-wrap" aria-label="What is happening">
+    <div id="scroller"><svg id="canvas" role="img" aria-label="Design map"></svg></div>
+    <div id="tools" role="toolbar" aria-label="Zoom">
+      <button id="z-out" title="Zoom out" aria-label="Zoom out">−</button>
+      <button id="z-reset" title="Actual size" aria-label="Actual size">100%</button>
+      <button id="z-in" title="Zoom in" aria-label="Zoom in">+</button>
+      <button id="z-fit" title="Fit to window" aria-label="Fit to window">Fit</button>
+    </div>
+    <div id="legend" class="mono"></div>
+  </section>
   <aside id="side" aria-label="Pending changes and risks"></aside>
 </main>
 <div id="toast" role="status" hidden></div>
