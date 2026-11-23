@@ -7,11 +7,11 @@ const mean = (x: number[]) => (x.length ? x.reduce((a, b) => a + b, 0) / x.lengt
 const f = (n: number) => n.toFixed(2);
 const spread = (x: number[]) => (x.length ? `${f(mean(x))} [${f(Math.min(...x))}-${f(Math.max(...x))}]` : "n/a");
 
-/** Group results by repo + label + prompt. Tainted runs are counted but excluded from the means. */
+/** Group results by repo + label + prompt + golden version, so scores against different goldens are never averaged. Tainted runs are counted but excluded from the means. */
 export function summarize(records: RunRecord[]): string {
   const groups = new Map<string, RunRecord[]>();
   for (const r of records) {
-    const key = `${r.repo} / ${r.label} / prompt ${r.promptHash}`;   // not '|': it would split the markdown cell
+    const key = `${r.repo} / ${r.label} / prompt ${r.promptHash} / golden ${r.goldenHash ?? "unknown"}`;   // not '|': it would split the markdown cell
     const list = groups.get(key) ?? [];
     list.push(r);
     groups.set(key, list);

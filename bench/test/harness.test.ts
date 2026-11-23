@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { stringify } from "yaml";
 import { apply, listProposals, loadMap, propose } from "../../core/src/index.ts";
 import type { Op } from "../../core/src/index.ts";
-import { ALLOWED_BUILTIN, auditTranscript, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, runScripted, startAutoApprover } from "../harness.ts";
+import { ALLOWED_BUILTIN, auditTranscript, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, rescoreRun, runScripted, startAutoApprover } from "../harness.ts";
 import type { RunRecord, Step } from "../harness.ts";
 import { COLD_START_PROMPT } from "../prompt.ts";
 import { loadGolden } from "../score.ts";
@@ -160,12 +160,12 @@ test("the task prompt does not name or hint at any component of the repos under 
 
 test("report: tainted runs are counted but excluded from the means", () => {
   const mk = (recall: number, tainted: boolean): RunRecord => ({
-    repo: "gopass", runId: String(Math.random()), label: "cold", agent: "claude", promptHash: "abc", commit: "x", finished: "", wallMs: 1, tainted, taintReasons: [],
+    repo: "gopass", runId: String(Math.random()), label: "cold", agent: "claude", promptHash: "abc", goldenHash: "g1", commit: "x", finished: "", wallMs: 1, tainted, taintReasons: [],
     score: { repo: "gopass", nodes: { golden: 3, citable: 3, matched: 0, recall, missed: [], byName: [] }, edges: { golden: 2, scored: 2, hit: 0, reversed: 0, recall: recall / 2, evaluable: 0, missed: [] }, extras: { count: 4, ids: [] }, cites: { total: 1, valid: 1, validity: 1, groundedNodes: 1, nodes: 1 } },
     final: { rev: 3, nodes: 3, edges: 2, signals: {} }, approver: { applied: 3, rebased: 1, rejected: 0, reasons: [] }, audit: { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [], grantedExtra: [], deniedAttempts: [], costUsd: 1.5 },
   });
   const out = summarize([mk(0.5, false), mk(0.7, false), mk(0.99, true)]);
-  assert.match(out, /\| gopass \/ cold \/ prompt abc \| 2\/1 \|/, "one cell for the setup, then 2 clean / 1 tainted");
+  assert.match(out, /\| gopass \/ cold \/ prompt abc \/ golden g1 \| 2\/1 \|/, "one cell for the setup, then 2 clean / 1 tainted");
   assert.match(out, /0\.60 \[0\.50-0\.70\]/, "tainted 0.99 is left out");
   assert.match(out, /\$4\.50/, "cost counts every run, tainted or not");
   assert.match(out, /read the spread/);
@@ -218,5 +218,31 @@ test("reauditRun recomputes taint from the stored transcript and keeps the score
   assert.equal(after.tainted, false);
   assert.deepEqual(after.audit!.deniedAttempts, ["Bash"]);
   assert.deepEqual(after.score, before.score, "scores are not recomputed");
+  t.done();
+});
+
+test("rescore: a changed golden changes the score and its hash; the agent's map and cost are untouched", async () => {
+  const t = fixture();
+  const p = prepareRun({ stripped: t.stripped, repo: "fake", runId: "rs", ...t.opts });
+  const approver = startAutoApprover(p.work, 20);
+  await runScripted(p.work, steps);
+  await approver.stop();
+  const first = finishRun({ repo: "fake", runId: "rs", label: "x", agent: "scripted", goldenFile: t.goldenFile, paths: p, approver: approver.stats, wallMs: 1, audit: { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [], grantedExtra: [], deniedAttempts: [], costUsd: 0.5 } });
+  assert.equal(first.score.nodes.citable, 3);
+  // golden v2: a fourth component the agent never built
+  writeFileSync(t.goldenFile, stringify({
+    repo: "fake", commit: "abc123",
+    nodes: [
+      { id: "root", label: "root store", paths: ["internal/store/root"] }, { id: "leaf", label: "leaf store", paths: ["internal/store/leaf"] },
+      { id: "gitfs", label: "gitfs", paths: ["internal/backend/gitfs"] }, { id: "ghost", label: "ghost", paths: ["internal/store/root/a.go"] },
+    ],
+    edges: [{ from: "root", to: "leaf" }],
+  }));
+  const second = rescoreRun(p.out, t.goldenFile, p.work);
+  assert.notEqual(second.goldenHash, first.goldenHash);
+  assert.equal(second.score.nodes.citable, 4);
+  assert.equal(second.score.edges.scored, 1);
+  assert.equal(second.audit!.costUsd, 0.5, "cost untouched");
+  assert.equal(second.final.rev, first.final.rev, "the run's own record untouched");
   t.done();
 });

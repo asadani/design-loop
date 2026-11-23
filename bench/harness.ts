@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { parse } from "yaml";
 import { apply, computeSignals, DesignError, initMap, listProposals, loadMap, paths, rebase, reject } from "../core/src/index.ts";
-import type { Op } from "../core/src/index.ts";
+import type { MapDoc, Op } from "../core/src/index.ts";
 import { createServer } from "../mcp/src/server.ts";
 import { loadCandidate, loadGolden, score } from "./score.ts";
 import type { Result as Score } from "./score.ts";
@@ -233,9 +235,13 @@ export function auditTranscript(lines: string[], work?: string): Audit {
 
 export interface RunRecord {
   repo: string; runId: string; label: string; agent: string; promptHash: string; commit: string; finished: string;
+  /** Hash of the golden file this score was computed against. Scores are only comparable at the same hash. */
+  goldenHash: string;
   score: Score; final: { rev: number; nodes: number; edges: number; signals: Record<string, number> };
   approver: ApproverStats; audit?: Audit; tainted: boolean; taintReasons: string[]; wallMs: number; timedOut?: boolean;
 }
+
+export const goldenHashOf = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 10);
 
 export function finishRun(o: { repo: string; runId: string; label: string; agent: string; goldenFile: string; paths: RunPaths; approver: ApproverStats; audit?: Audit; wallMs: number; timedOut?: boolean }): RunRecord {
   const golden = loadGolden(o.goldenFile);
@@ -249,7 +255,7 @@ export function finishRun(o: { repo: string; runId: string; label: string; agent
     ...(o.timedOut ? ["timed out"] : []),
   ];
   const rec: RunRecord = {
-    repo: o.repo, runId: o.runId, label: o.label, agent: o.agent, promptHash: PROMPT_HASH, commit: golden.commit, finished: new Date().toISOString(),
+    repo: o.repo, runId: o.runId, label: o.label, agent: o.agent, promptHash: PROMPT_HASH, commit: golden.commit, finished: new Date().toISOString(), goldenHash: goldenHashOf(o.goldenFile),
     score: score(golden, map, o.paths.work),
     final: { rev: map.rev, nodes: map.nodes.length, edges: map.edges.length, signals },
     approver: o.approver, audit: o.audit, tainted: taintReasons.length > 0, taintReasons, wallMs: o.wallMs, timedOut: o.timedOut,
@@ -273,6 +279,19 @@ export function reauditRun(dir: string): RunRecord {
     ...(rec.timedOut ? ["timed out"] : []),
   ];
   const next: RunRecord = { ...rec, audit, tainted: taintReasons.length > 0, taintReasons };
+  writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+  return next;
+}
+
+/**
+ * Re-score a stored run against the current golden file, from the map saved with the run. Use after the golden changes.
+ * Only `score` and `goldenHash` change; the agent's map, audit and cost are untouched.
+ */
+export function rescoreRun(dir: string, goldenFile: string, repoRoot: string): RunRecord {
+  const file = join(dir, "result.json");
+  const rec = readResult(file);
+  const map = parse(readFileSync(join(dir, "design", "map.yaml"), "utf8")) as MapDoc;
+  const next: RunRecord = { ...rec, score: score(loadGolden(goldenFile), map, repoRoot), goldenHash: goldenHashOf(goldenFile) };
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
   return next;
 }
