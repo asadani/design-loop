@@ -97,10 +97,24 @@ printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"cwd\\":\\"$
 printf '%s\\n' '{"type":"result","total_cost_usd":0.01,"num_turns":1,"duration_ms":1,"session_id":"s","is_error":false}'
 `);
   chmodSync(bin, 0o755);
-  const r = await replayAgent({ cfg: f.cfg, agent: "claude", label: "c", runId: "c1", outDir: f.out("c1"), budgetUsd: 0.5, bin });
+  await assert.rejects(replayAgent({ cfg: f.cfg, agent: "claude", label: "c", runId: "cx", outDir: f.out("cx"), budgetUsd: 0.5, bin, env: { ANTHROPIC_API_KEY: "x" } }), /would bill an API account/);
+  const r = await replayAgent({ cfg: f.cfg, agent: "claude", label: "c", runId: "c1", outDir: f.out("c1"), budgetUsd: 0.5, bin, env: {} });
   assert.equal(r.tainted, false);
   assert.equal(Number(r.costUsd.toFixed(2)), 0.03, "three checkpoints at $0.01");
   assert.ok(existsSync(f.out("c1/cp-01.jsonl")) && existsSync(f.out("c1/cp-03.jsonl")));
   assert.match(readFileSync(f.out("c1/cp-01.prompt.txt"), "utf8"), /feat: add c/);
+  f.done();
+});
+
+test("claude agent: a session that reports API-key auth stops the replay after that checkpoint", async () => {
+  const f = fixture();
+  const bin = f.out("fake-api-claude.sh");
+  writeFileSync(bin, `#!/bin/sh
+printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"cwd\\":\\"$PWD\\",\\"apiKeySource\\":\\"ANTHROPIC_API_KEY\\",\\"tools\\":[\\"Read\\"]}"
+printf '%s\\n' '{"type":"result","total_cost_usd":0.01}'
+`);
+  chmodSync(bin, 0o755);
+  await assert.rejects(replayAgent({ cfg: f.cfg, agent: "claude", label: "c", runId: "c2", outDir: f.out("c2"), budgetUsd: 0.5, bin, env: {} }), /apiKeySource "ANTHROPIC_API_KEY"/);
+  assert.ok(existsSync(f.out("c2/cp-01.jsonl")) && !existsSync(f.out("c2/cp-02.jsonl")), "no second session was started");
   f.done();
 });

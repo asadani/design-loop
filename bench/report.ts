@@ -21,7 +21,7 @@ export function summarize(records: RunRecord[]): string {
     groups.set(key, list);
   }
   const rows = [
-    "| setup | runs (clean/tainted) | node recall | core nodes | peripheral nodes | edge recall (strict) | edge recall (lenient) | cite validity | unjudged extras | approver rescues | cost |",
+    "| setup | runs (clean/tainted) | node recall | core nodes | peripheral nodes | edge recall (strict) | edge recall (lenient) | cite validity | unjudged extras | approver rescues | est. API cost |",
     "|---|---|---|---|---|---|---|---|---|---|---|",
   ];
   for (const [k, all] of [...groups].sort()) {
@@ -31,7 +31,7 @@ export function summarize(records: RunRecord[]): string {
       `| ${k} | ${ok.length}/${all.length - ok.length} | ${spread(ok.map((r) => r.score.nodes.recall))} | ${spread(tier(ok, "core"))} | ${spread(tier(ok, "peripheral"))} | ${spread(ok.map((r) => r.score.edges.recall))} | ${spread(ok.map((r) => r.score.edges.recallLenient ?? NaN).filter((x) => !Number.isNaN(x)))} | ${spread(ok.map((r) => r.score.cites.validity))} | ${f(mean(ok.map((r) => r.score.extras.count)))} | ${f(mean(ok.map((r) => r.approver.rebased + r.approver.rejected)))} | ${cost ? "$" + f(cost) : "-"} |`,
     );
   }
-  return rows.join("\n") + "\n\nCells are mean [min-max] over clean runs. Strict edge recall needs the same endpoints and direction; lenient also accepts an edge to a parent or child of an endpoint. Core = the golden draws an edge to or from the node; peripheral = it does not (a structural rule, chosen after seeing the first gopass results). Few runs and small golden maps: read the spread, not the mean.\n";
+  return rows.join("\n") + "\n\nCells are mean [min-max] over clean runs. Strict edge recall needs the same endpoints and direction; lenient also accepts an edge to a parent or child of an endpoint. Core = the golden draws an edge to or from the node; peripheral = it does not (a structural rule, chosen after seeing the first gopass results). Few runs and small golden maps: read the spread, not the mean. Costs are Claude Code's API-price estimates; on a subscription nothing is billed per token.\n";
 }
 
 export function loadAll(root = join(benchRoot(), "results")): RunRecord[] {

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { stringify } from "yaml";
 import { apply, listProposals, loadMap, propose } from "../../core/src/index.ts";
 import type { Op } from "../../core/src/index.ts";
-import { ALLOWED_BUILTIN, auditTranscript, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, rescoreRun, runScripted, startAutoApprover } from "../harness.ts";
+import { ALLOWED_BUILTIN, auditTranscript, billingCheck, billingPreflight, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, rescoreRun, runScripted, startAutoApprover } from "../harness.ts";
 import type { RunRecord, Step } from "../harness.ts";
 import { COLD_START_PROMPT } from "../prompt.ts";
 import { loadGolden } from "../score.ts";
@@ -256,4 +256,18 @@ test("report: a tier with no golden nodes shows n/a, not 0%", () => {
   const row = summarize([rec()]).split("\n").find((l) => l.startsWith("| swagger-php"))!.split("|").map((c) => c.trim());
   assert.equal(row[4], "0.50 [0.50-0.50]", "core");
   assert.equal(row[5], "n/a", "peripheral");
+});
+
+test("billing guard: API-billing env refuses up front (names only); a non-subscription session stops the run", () => {
+  assert.equal(billingPreflight({}), null);
+  const why = billingPreflight({ ANTHROPIC_API_KEY: "sk-secret-value", CLAUDE_CODE_USE_BEDROCK: "1" })!;
+  assert.match(why, /ANTHROPIC_API_KEY, CLAUDE_CODE_USE_BEDROCK are set/);
+  assert.ok(!why.includes("sk-secret-value"), "never echo the value");
+  assert.equal(billingPreflight({ ANTHROPIC_API_KEY: "x" }, true), null, "explicit opt-in");
+  const init = (src?: string) => auditTranscript([JSON.stringify({ type: "system", subtype: "init", cwd: "/tmp", tools: [], ...(src === undefined ? {} : { apiKeySource: src }) })]);
+  assert.equal(init("none").apiKeySource, "none");
+  assert.equal(billingCheck(init("none")), null);
+  assert.equal(billingCheck(init()), null, "older transcripts without the field are not blocked");
+  assert.match(billingCheck(init("ANTHROPIC_API_KEY"))!, /apiKeySource "ANTHROPIC_API_KEY"/);
+  assert.equal(billingCheck(init("ANTHROPIC_API_KEY"), true), null);
 });

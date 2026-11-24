@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { apply, baseline, computeSignals, diffMaps, initMap, listProposals, loadMap, propose, saveCoverage } from "../core/src/index.ts";
 import type { MapDoc, Op, Signal } from "../core/src/index.ts";
-import { auditTranscript, goldenHashOf, runClaude, runScripted, startAutoApprover } from "./harness.ts";
+import { auditTranscript, billingCheck, billingPreflight, goldenHashOf, runClaude, runScripted, startAutoApprover } from "./harness.ts";
 import type { Audit } from "./harness.ts";
 import { UPDATE_PROMPT_HASH, updatePrompt } from "./prompt.ts";
 import { events, gitState, goldenAtBase, loadConfig, mapOps, materialize, under } from "./replay.ts";
@@ -47,6 +47,7 @@ export interface ReplayRun {
   promptHash: string; goldenHash: string; base: string; finished: string;
   checkpoints: CheckpointResult[];
   final: { rev: number; nodes: number; edges: number; score: Score };
+  /** Sum of Claude Code's API-price estimates. Not money billed when running on a subscription. */
   costUsd: number; tainted: boolean;
 }
 
@@ -176,6 +177,9 @@ export interface RunOptions {
   cfg: ReplayConfig; agent: AgentKind; label: string; runId: string; outDir: string;
   budgetUsd?: number; model?: string; timeoutMs?: number; bin?: string; work?: string;
   custom?: (i: number, map: MapDoc, signals: Signal[]) => Op[];
+  /** Accept API billing. Off by default: a run stops if a session is not on the subscription. */
+  allowApiBilling?: boolean;
+  env?: NodeJS.ProcessEnv;
 }
 
 async function drained(work: string, ms = 5000) {
@@ -186,6 +190,7 @@ async function drained(work: string, ms = 5000) {
 export async function replayAgent(o: RunOptions): Promise<ReplayRun> {
   const { cfg } = o;
   if (o.agent === "claude" && !((o.budgetUsd ?? 0) > 0)) throw new Error("refusing: --agent claude needs a positive per-checkpoint budget");
+  if (o.agent === "claude") { const why = billingPreflight(o.env ?? process.env, o.allowApiBilling); if (why) throw new Error(why); }
   const work = o.work ?? mkdtempSync(join(tmpdir(), "dl-replay2-"));
   mkdirSync(o.outDir, { recursive: true });
   materialize(cfg.source, cfg.base, work, cfg.strip);
@@ -213,6 +218,8 @@ export async function replayAgent(o: RunOptions): Promise<ReplayRun> {
         timedOut = r.timedOut;
         audit = auditTranscript(readFileSync(r.transcript, "utf8").split("\n"), work);
         cost += audit.costUsd ?? 0;
+        const billing = billingCheck(audit, o.allowApiBilling);
+        if (billing) throw new Error(billing);
       }
       await drained(work);
       const after = loadMap(work), endSignals = computeSignals(work);
@@ -277,7 +284,7 @@ export function runMarkdown(r: ReplayRun): string {
   const rows = [
     `# Replay, layer 2: ${r.repo} / ${r.agent}${r.model ? ` (${r.model})` : ""} / ${r.runId}`,
     "",
-    `prompt ${r.promptHash} / golden ${r.goldenHash} / cost $${r.costUsd.toFixed(2)}${r.tainted ? " / TAINTED" : ""}`,
+    `prompt ${r.promptHash} / golden ${r.goldenHash} / estimated API cost $${r.costUsd.toFixed(2)} (not billed on a subscription)${r.tainted ? " / TAINTED" : ""}`,
     "",
     "| # | checkpoint | expect | new code mapped | drift cleared | new deps drawn (strict / either way) | unevaluable deps | churn | map changes | rejected |",
     "|---|---|---|---|---|---|---|---|---|---|",
@@ -309,7 +316,7 @@ export function runMarkdown(r: ReplayRun): string {
 }
 
 export function summaryMarkdown(runs: ReplayRun[]): string {
-  const rows = ["| run | agent | new code mapped | drift cleared | new deps (strict / either) | churn | changes on controls | golden preserved: nodes | golden preserved: edges (strict / lenient) | cost |", "|---|---|---|---|---|---|---|---|---|---|"];
+  const rows = ["| run | agent | new code mapped | drift cleared | new deps (strict / either) | churn | changes on controls | golden preserved: nodes | golden preserved: edges (strict / lenient) | est. API cost |", "|---|---|---|---|---|---|---|---|---|---|"];
   for (const r of runs) {
     const t = totals(r), s = r.final.score;
     rows.push(`| ${r.runId}${r.tainted ? " (TAINTED)" : ""} | ${r.agent} | ${pct(t.newMapped, t.newOpen)} | ${pct(t.driftCleared, t.driftOpen)} | ${pct(t.depsHit, t.depsEval)} / ${pct(t.depsLenient, t.depsEval)} | ${t.churn} | ${t.controlChanges} | ${s.nodes.recall} | ${s.edges.recall} / ${s.edges.recallLenient} | $${r.costUsd.toFixed(2)} |`);
@@ -322,11 +329,13 @@ export function summaryMarkdown(runs: ReplayRun[]): string {
 if (import.meta.main) {
   const { values: v } = parseArgs({
     options: { config: { type: "string" }, agent: { type: "string", default: "oracle" }, label: { type: "string" }, runs: { type: "string", default: "1" },
-      budget: { type: "string" }, model: { type: "string" }, "timeout-min": { type: "string", default: "15" }, "dry-run": { type: "boolean", default: false } },
+      budget: { type: "string" }, model: { type: "string" }, "timeout-min": { type: "string", default: "15" }, "dry-run": { type: "boolean", default: false },
+      "allow-api-billing": { type: "boolean", default: false } },
     strict: true,
   });
   const USAGE = `usage: node bench/replay-agent.ts --config <bench>/replay/<repo>.yaml --label <name> [--agent oracle|idle|claude] [--runs N]
-  --budget USD    hard cap PER CHECKPOINT for --agent claude (required for claude)
+  --budget USD    cap PER CHECKPOINT on Claude Code's estimated API cost (required for claude; on a subscription it caps usage, not money)
+  --allow-api-billing  run even if the session would bill an API key instead of your subscription
   --model alias   --timeout-min N (per checkpoint, default 15)   --dry-run  print each checkpoint's prompt, run nothing`;
   if (!v.config || !v.label || !["oracle", "idle", "claude"].includes(v.agent!)) { console.error(USAGE); process.exit(2); }
   const cfg = loadConfig(v.config);
@@ -336,11 +345,12 @@ if (import.meta.main) {
     process.exit(0);
   }
   if (v.agent === "claude" && !(Number(v.budget) > 0)) { console.error("refusing: --agent claude needs --budget <USD per checkpoint>\n" + USAGE); process.exit(2); }
+  if (v.agent === "claude") { const why = billingPreflight(process.env, v["allow-api-billing"]); if (why) { console.error(why); process.exit(2); } }
   const runs: ReplayRun[] = [];
   const base = join(resolve(dirname(v.config), ".."), "results", "replay", cfg.repo);
   for (let i = 1; i <= Math.max(1, Number(v.runs)); i++) {
     const runId = `${v.label}-${i}-${Date.now().toString(36)}`;
-    const r = await replayAgent({ cfg, agent: v.agent as AgentKind, label: v.label, runId, outDir: join(base, runId), budgetUsd: Number(v.budget ?? 0), model: v.model, timeoutMs: Number(v["timeout-min"]) * 60_000 });
+    const r = await replayAgent({ cfg, agent: v.agent as AgentKind, label: v.label, runId, outDir: join(base, runId), budgetUsd: Number(v.budget ?? 0), model: v.model, timeoutMs: Number(v["timeout-min"]) * 60_000, allowApiBilling: v["allow-api-billing"] });
     runs.push(r);
     console.log(`${runId}  -> ${join(base, runId)}/report.md`);
   }

@@ -126,6 +126,24 @@ export function claudeArgs(o: { prompt: string; mcpConfigPath: string; budgetUsd
   ];
 }
 
+// ---------------------------------------------------------------- billing guard
+
+/** Environment variables that make Claude Code bill an API account instead of the signed-in subscription. */
+export const API_BILLING_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"];
+
+/** Before any session: refuse if the environment would switch Claude Code to API billing. Names only, never values. */
+export function billingPreflight(env: NodeJS.ProcessEnv = process.env, allowApi = false): string | null {
+  const set = API_BILLING_ENV.filter((k) => env[k]);
+  if (!set.length || allowApi) return null;
+  return `refusing: ${set.join(", ")} ${set.length > 1 ? "are" : "is"} set, so claude would bill an API account instead of your subscription. Unset ${set.length > 1 ? "them" : "it"}, or pass --allow-api-billing.`;
+}
+
+/** After each session: the transcript says how it actually authenticated. Anything but "none" stops the run. */
+export function billingCheck(a: Audit | undefined, allowApi = false): string | null {
+  if (allowApi || !a || a.apiKeySource === undefined || a.apiKeySource === "none") return null;
+  return `stopping: the session authenticated with apiKeySource "${a.apiKeySource}", not your subscription. Pass --allow-api-billing to accept API billing.`;
+}
+
 export async function runClaude(o: { work: string; out: string; budgetUsd: number; model?: string; timeoutMs: number; bin?: string; prompt?: string; name?: string }): Promise<{ exitCode: number | null; timedOut: boolean; transcript: string }> {
   const cfg = join(o.out, "mcp.json");
   writeFileSync(cfg, mcpConfig(o.work));
@@ -157,6 +175,9 @@ export interface Audit {
   /** Attempts the sandbox refused (e.g. "No such tool available: Bash"). Informational: nothing was read or run. */
   deniedAttempts: string[];
   model?: string;
+  /** From the init event. "none" = the signed-in subscription; anything else means an API key is being billed. */
+  apiKeySource?: string;
+  /** Claude Code's API-price ESTIMATE (total_cost_usd). On a subscription nothing is billed per token. */
   costUsd?: number; turns?: number; durationMs?: number; sessionId?: string; isError?: boolean;
 }
 
@@ -189,7 +210,7 @@ export function auditTranscript(lines: string[], work?: string): Audit {
   const root = real(work ?? init?.cwd ?? ".");
   const inside = (p: string) => { const r = real(isAbsolute(p) ? p : join(root, p)); return r === root || r.startsWith(root + "/"); };
   const allowed = new Set([...ALLOWED_BUILTIN, ...MCP_TOOLS]);
-  if (init) { a.model = init.model; a.grantedExtra = (init.tools ?? []).filter((t: string) => !allowed.has(t)); }
+  if (init) { a.model = init.model; a.apiKeySource = init.apiKeySource; a.grantedExtra = (init.tools ?? []).filter((t: string) => !allowed.has(t)); }
 
   const pending = new Map<string, { name: string; outside: string[]; disallowed: boolean }>();
   for (const m of events) {
