@@ -6,7 +6,7 @@ import { loadGolden } from "./score.ts";
  * Finds text files left in a stripped repo that still describe the architecture: files that
  * mention several golden components. Code is ignored (it is the thing under test); prose is not.
  */
-const TEXT = /\.(md|mdx|txt|rst|adoc|1|yml|yaml)$/i;
+const TEXT = /\.(md|mdx|txt|rst|adoc|1|yml|yaml|dot|gv|puml|plantuml|mmd|mermaid|drawio|excalidraw|svg)$/i;
 export function leakScan(goldenFile: string, repoRoot: string, min = 4): { file: string; hits: string[] }[] {
   const g = loadGolden(goldenFile);
   const terms = g.nodes.flatMap((n) => [...(n.paths ?? []).map((p) => p.replace(/\.php$/, "")), ...(n.citable === false ? [] : [n.label.replace(/\s*\(.*\)/, "")])]).filter((t) => t.length > 3);
