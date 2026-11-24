@@ -254,6 +254,6 @@ test("report: a tier with no golden nodes shows n/a, not 0%", () => {
     final: { rev: 1, nodes: 2, edges: 1, signals: {} }, approver: { applied: 1, rebased: 0, rejected: 0, reasons: [] },
   });
   const row = summarize([rec()]).split("\n").find((l) => l.startsWith("| swagger-php"))!.split("|").map((c) => c.trim());
-  assert.equal(row[5], "0.50 [0.50-0.50]", "core");
-  assert.equal(row[6], "n/a", "peripheral");
+  assert.equal(row[4], "0.50 [0.50-0.50]", "core");
+  assert.equal(row[5], "n/a", "peripheral");
 });
