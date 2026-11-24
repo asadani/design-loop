@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import type { MapDoc } from "./types.ts";
-import { citeHash, mapAtRev } from "./flow.ts";
+import { citeHash, mapAtRev, nestedCites } from "./flow.ts";
 import { loadMap, paths } from "./store.ts";
 import { loadCoverage, uncovered } from "./coverage.ts";
 
@@ -17,7 +17,7 @@ export function computeSignals(root: string, map: MapDoc = loadMap(root)): Signa
       out.push({ node: n.id, type: "no-cite", severity: "info", detail: `${n.status} node has no code reference` });
     }
     for (const c of n.cites ?? []) {
-      const now = citeHash(root, c);
+      const now = citeHash(root, c, nestedCites(map, c));
       if (now === null) out.push({ node: n.id, type: "cite-missing", severity: "high", detail: `${c.path} does not exist` });
       else if (c.hash && c.hash !== now) out.push({ node: n.id, type: "cite-moved", severity: "warn", detail: `${c.path}${c.lines ? `:${c.lines[0]}-${c.lines[1]}` : ""} changed since it was anchored` });
     }

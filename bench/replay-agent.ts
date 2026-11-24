@@ -36,6 +36,8 @@ export interface CheckpointResult {
   changes: { nodesAdded: string[]; nodesRemoved: string[]; nodesChanged: string[]; edgesAdded: string[]; edgesRemoved: string[]; edgesChanged: string[] };
   /** Removals and edits with no cause in this checkpoint's code changes. */
   churn: string[];
+  /** Nodes whose only change was re-sending cites while they had open drift: maintenance, never over-reaction. */
+  reanchored: string[];
   signalsAfter: number;
   approver: { applied: number; rejected: number; reasons: string[] };
   audit?: Audit;
@@ -80,7 +82,7 @@ const uncoveredPaths = (s: Signal[]) => s.filter((g) => g.type === "uncovered").
 export function judgeCheckpoint(o: {
   work: string; before: MapDoc; after: MapDoc; prev: RepoState; cur: RepoState;
   startSignals: Signal[]; endSignals: Signal[]; carriedIn: string[];
-}): Pick<CheckpointResult, "newCode" | "drift" | "deps" | "removedDeps" | "changes" | "churn" | "signalsAfter"> {
+}): Pick<CheckpointResult, "newCode" | "drift" | "deps" | "removedDeps" | "changes" | "churn" | "reanchored" | "signalsAfter"> {
   const nodes = mapPathed(o.after, o.work);
   const ev: Events = events(o.prev, o.cur, nodes);
   const has = (a: string, b: string) => o.after.edges.some((e) => e.from === a && e.to === b);
@@ -128,6 +130,7 @@ export function judgeCheckpoint(o: {
     deps, removedDeps,
     changes: { nodesAdded: d.nodes.added, nodesRemoved: d.nodes.removed, nodesChanged: d.nodes.changed.map((c) => c.id), edgesAdded: d.edges.added, edgesRemoved: d.edges.removed, edgesChanged: d.edges.changed.map((c) => c.id) },
     churn,
+    reanchored: d.nodes.changed.filter((c) => c.fields.length === 1 && c.fields[0] === "cites" && dOpen.includes(c.id)).map((c) => c.id),
     signalsAfter: o.endSignals.length,
   };
 }
@@ -272,7 +275,7 @@ export function totals(r: ReplayRun) {
     depsEval: sum((c) => c.deps.evaluable), depsHit: sum((c) => c.deps.hit), depsLenient: sum((c) => c.deps.hitLenient), depsUneval: sum((c) => c.deps.unevaluable.length),
     churn: sum((c) => c.churn.length),
     /** Any map change on a control checkpoint is an over-reaction: nothing architectural happened. */
-    controlChanges: of("control").reduce((a, c) => a + changed(c), 0), controls: of("control").length,
+    controlChanges: of("control").reduce((a, c) => a + changed(c) - c.reanchored.length, 0), controls: of("control").length,
     /** Informational: re-anchoring drift on a noise checkpoint is correct, so this is not a penalty. */
     noiseChanges: of("noise").reduce((a, c) => a + changed(c), 0),
     rejected: sum((c) => c.approver.rejected),

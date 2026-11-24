@@ -118,3 +118,16 @@ printf '%s\\n' '{"type":"result","total_cost_usd":0.01}'
   assert.ok(existsSync(f.out("c2/cp-01.jsonl")) && !existsSync(f.out("c2/cp-02.jsonl")), "no second session was started");
   f.done();
 });
+
+test("re-anchoring open drift on a control is maintenance, not over-reaction", async () => {
+  const f = fixture();
+  const r = await replayAgent({
+    cfg: f.cfg, agent: "custom", label: "y", runId: "y1", outDir: f.out("y1"),
+    custom: (i, map) => (i === 2 ? [{ op: "update_node", id: "na", set: { cites: map.nodes.find((n) => n.id === "na")!.cites!.map((c) => ({ path: c.path })) } }] : []),
+  });
+  const ctl = r.checkpoints[2];
+  assert.deepEqual(ctl.drift, { open: ["na"], cleared: ["na"] }, "na drifted at checkpoint 2 and nobody fixed it until the control");
+  assert.deepEqual(ctl.reanchored, ["na"]);
+  assert.equal(totals(r).controlChanges, 0);
+  f.done();
+});

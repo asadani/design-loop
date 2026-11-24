@@ -87,3 +87,49 @@ test("root \".\" watches the whole repo with clean relative paths", () => {
   assert.deepEqual(uncovered(r.root, m, cfg({ roots: ["./"], acknowledged: ["."] })).map((u) => u.path), ["c"], "acknowledging the root folder does not hide its sub-folders");
   r.done();
 });
+
+// ---- nested cites: a folder cite does not watch code a more specific cite watches
+const add = (root: string, id: string, path: string, extra: Record<string, unknown> = {}) =>
+  apply(root, propose(root, { base_rev: loadMap(root).rev, source: { kind: "import", summary: "s" }, ops: [{ op: "add_node", node: { id, label: id, role: "backend", status: "stable", cites: [{ path, ...extra }] } }] }).id);
+const drifted = (root: string) => computeSignals(root).filter((s) => s.type === "cite-moved").map((s) => s.node).sort();
+const touch = (root: string, f: string) => { mkdirSync(dirname(join(root, f)), { recursive: true }); writeFileSync(join(root, f), "x\n"); };
+
+test("nested cites: a change inside a child flags only the child", () => {
+  const r = repo(["internal/backend/reg.go", "internal/backend/age/a.go"]);
+  add(r.root, "backend", "internal/backend"); add(r.root, "age", "internal/backend/age");
+  touch(r.root, "internal/backend/age/new.go");
+  assert.deepEqual(drifted(r.root), ["age"]);
+  touch(r.root, "internal/backend/gogit/g.go");                 // not owned by any child: the parent sees it
+  assert.deepEqual(drifted(r.root), ["age", "backend"]);
+  r.done();
+});
+
+test("nested cites: mapping an existing sub-folder does not make a clean parent look drifted", () => {
+  const r = repo(["internal/backend/reg.go", "internal/backend/age/a.go"]);
+  add(r.root, "backend", "internal/backend");
+  assert.deepEqual(drifted(r.root), []);
+  add(r.root, "age", "internal/backend/age");                    // the parent's watched set shrinks; no code changed
+  assert.deepEqual(drifted(r.root), []);
+  r.done();
+});
+
+test("nested cites: a parent that was already drifted stays drifted when a child is added", () => {
+  const r = repo(["internal/backend/reg.go", "internal/backend/age/a.go"]);
+  add(r.root, "backend", "internal/backend");
+  touch(r.root, "internal/backend/extra.go");                   // real drift in the parent itself
+  add(r.root, "age", "internal/backend/age");
+  assert.deepEqual(drifted(r.root), ["backend"], "adding a child must not clear unrelated drift");
+  r.done();
+});
+
+test("hashes are server-owned: a proposal's hash is ignored, so re-sending a cite always re-anchors", () => {
+  const r = repo(["internal/a/x.go"]);
+  add(r.root, "a", "internal/a", { hash: "sha256:0000000000000000" });
+  assert.deepEqual(drifted(r.root), [], "the bogus hash was replaced on apply");
+  touch(r.root, "internal/a/y.go");
+  const stale = loadMap(r.root).nodes[0].cites![0].hash;
+  assert.deepEqual(drifted(r.root), ["a"]);
+  apply(r.root, propose(r.root, { base_rev: loadMap(r.root).rev, source: { kind: "agent-turn", summary: "re-anchor" }, ops: [{ op: "update_node", id: "a", set: { cites: [{ path: "internal/a", hash: stale }] } }] }).id);
+  assert.deepEqual(drifted(r.root), [], "echoing the stale hash back still re-anchors");
+  r.done();
+});

@@ -11,16 +11,29 @@ import { appendHistory, listHistory, listProposals, loadMap, loadPins, loadPropo
 export const SKIP_DIR = /^(\.|node_modules$|vendor$|testdata$|__tests?__$|tests?$)/;
 export const SKIP_FILE = /(^\.|_test\.|\.test\.|\.spec\.|Test\.php$)/;
 
-/** Sorted relative paths of non-test, non-hidden files under a directory. Symlinks are never followed. */
-function listTree(abs: string, rel = ""): string[] {
+/** Sorted relative paths of non-test, non-hidden files under a directory. Symlinks are never followed. `skip` holds relative paths to leave out. */
+function listTree(abs: string, rel = "", skip: Set<string> = new Set()): string[] {
   const out: string[] = [];
   for (const e of readdirSync(join(abs, rel), { withFileTypes: true })) {
     const r = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isSymbolicLink()) continue;
-    if (e.isDirectory()) { if (!SKIP_DIR.test(e.name)) out.push(...listTree(abs, r)); }
+    if (e.isSymbolicLink() || skip.has(r)) continue;
+    if (e.isDirectory()) { if (!SKIP_DIR.test(e.name)) out.push(...listTree(abs, r, skip)); }
     else if (e.isFile() && !SKIP_FILE.test(e.name)) out.push(r);
   }
   return out.sort();
+}
+
+const normPath = (p: string) => p.replace(/^\.\//, "").replace(/\/+$/, "");
+
+/**
+ * Paths inside a folder cite that some cite in the map points at more specifically. A folder cite does not watch
+ * code another cite already watches: otherwise a change inside a child component (age under backend) would flag the
+ * parent too, and stay flagged after the child is re-anchored.
+ */
+export function nestedCites(map: MapDoc, c: Cite): string[] {
+  const base = normPath(c.path);
+  const all = map.nodes.flatMap((n) => (n.cites ?? []).map((x) => normPath(x.path)));
+  return [...new Set(all.filter((p) => p !== base && p.startsWith(base + "/")))].sort();
 }
 
 /**
@@ -28,11 +41,13 @@ function listTree(abs: string, rel = ""): string[] {
  * hashes its file LISTING, not contents: architecture drift is files appearing, vanishing or moving,
  * and hashing contents would flag a large package on every edit.
  */
-export function citeHash(root: string, c: Cite): string | null {
+export function citeHash(root: string, c: Cite, exclude: string[] = []): string | null {
   const f = join(root, c.path);
   if (!existsSync(f) || lstatSync(f).isSymbolicLink()) return null;
   if (statSync(f).isDirectory()) {
-    return "sha256:" + createHash("sha256").update(listTree(f).join("\n")).digest("hex").slice(0, 16);
+    const base = normPath(c.path);
+    const skip = new Set(exclude.map(normPath).filter((p) => p.startsWith(base + "/")).map((p) => p.slice(base.length + 1)));
+    return "sha256:" + createHash("sha256").update(listTree(f, "", skip).join("\n")).digest("hex").slice(0, 16);
   }
   let lines = readFileSync(f, "utf8").split("\n").map((l) => l.replace(/\s+$/, ""));
   if (c.lines) lines = lines.slice(c.lines[0] - 1, c.lines[1]);
@@ -40,8 +55,32 @@ export function citeHash(root: string, c: Cite): string | null {
 }
 
 function anchor(root: string, map: MapDoc): MapDoc {
-  for (const n of map.nodes) for (const c of n.cites ?? []) if (!c.hash) { const h = citeHash(root, c); if (h) c.hash = h; }
+  for (const n of map.nodes) for (const c of n.cites ?? []) if (!c.hash) { const h = citeHash(root, c, nestedCites(map, c)); if (h) c.hash = h; }
   return map;
+}
+
+/**
+ * Build the next map's cite hashes. Hashes are server-owned: any cite a proposal sets is re-anchored from the code,
+ * whatever hash the proposal carried (an agent echoing map_read output must not freeze a stale hash). A folder cite
+ * whose set of nested cites changed is re-hashed only if it was clean before, so a new child node does not make its
+ * parent look drifted, and real drift is never cleared as a side effect.
+ */
+function rehash(root: string, prev: MapDoc, next: MapDoc, ops: Op[]): MapDoc {
+  const set = new Set(ops.flatMap((o) => (o.op === "add_node" ? [o.node.id] : o.op === "update_node" && o.set.cites ? [o.id] : [])));
+  for (const n of next.nodes) if (set.has(n.id)) n.cites = n.cites?.map(({ hash: _h, ...rest }) => rest);
+  const before = new Map(prev.nodes.map((n) => [n.id, n]));
+  for (const n of next.nodes) {
+    if (set.has(n.id)) continue;
+    for (const c of n.cites ?? []) {
+      if (!c.hash) continue;
+      const was = before.get(n.id)?.cites?.find((x) => x.path === c.path);
+      if (!was) continue;
+      const oldEx = nestedCites(prev, c), newEx = nestedCites(next, c);
+      if (oldEx.join("\n") === newEx.join("\n")) continue;
+      if (citeHash(root, c, oldEx) === c.hash) { const h = citeHash(root, c, newEx); if (h) c.hash = h; }
+    }
+  }
+  return anchor(root, next);
 }
 
 /** Agent entry point. Fails fast (nothing saved) so the agent can fix and retry. */
@@ -62,7 +101,7 @@ export function apply(root: string, id: number): MapDoc {
   if (p.state !== "pending") throw new DesignError("NOT_PENDING", `proposal ${id} is ${p.state}`);
   const map = loadMap(root);
   if (p.base_rev !== map.rev) throw new DesignError("STALE", `proposal ${id} is based on rev ${p.base_rev}, map is at ${map.rev}; rebase it`);
-  const next = anchor(root, applyOps(map, p.ops, loadPins(root)));
+  const next = rehash(root, map, applyOps(map, p.ops, loadPins(root)), p.ops);
   next.rev = map.rev + 1;
   const entry: HistoryEntry = { rev: next.rev, applied: new Date().toISOString(), proposal: id, source: p.source, ops: p.ops, decided_by: "human" };
   appendHistory(root, entry); // first: if this fails the map is untouched
