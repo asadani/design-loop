@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { stringify } from "yaml";
-import { checkpointContext, replayAgent, runMarkdown, totals } from "../replay-agent.ts";
+import { checkpointContext, driftEpisodes, replayAgent, runMarkdown, totals } from "../replay-agent.ts";
+import type { CheckpointResult, ReplayRun } from "../replay-agent.ts";
 import type { ReplayConfig } from "../replay.ts";
 
 // A tiny Go repo: c0 base; c1 adds package c (no node covers it) and b starts importing it;
@@ -130,4 +131,14 @@ test("re-anchoring open drift on a control is maintenance, not over-reaction", a
   assert.deepEqual(ctl.reanchored, ["na"]);
   assert.equal(totals(r).controlChanges, 0);
   f.done();
+});
+
+test("drift is scored per episode: one skipped step counts once, not at every later checkpoint", () => {
+  const cp = (open: string[], cleared: string[]) => ({ drift: { open, cleared } }) as unknown as CheckpointResult;
+  const run = (cps: CheckpointResult[]) => ({ checkpoints: cps }) as unknown as ReplayRun;
+  // x drifts at 0 and is fixed at 0; y drifts at 0, skipped until 2; z drifts at 1 and is never fixed; x drifts again at 3
+  const d = driftEpisodes(run([cp(["x", "y"], ["x"]), cp(["y", "z"], []), cp(["y", "z"], ["y"]), cp(["z", "x"], ["x"])]));
+  assert.deepEqual(d.list.map((e) => `${e.node}:${e.start}-${e.end}`).sort(), ["x:0-0", "x:3-3", "y:0-2", "z:1-null"]);
+  assert.deepEqual([d.episodes, d.sameCheckpoint, d.eventually, d.unresolved], [4, 2, 3, 1]);
+  assert.equal(d.meanLife, (1 + 1 + 3 + 3) / 4);
 });

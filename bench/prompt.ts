@@ -31,7 +31,7 @@ const UPDATE_TAIL = `What to do:
    - add edges for dependencies between components that these changes introduced, and remove edges for dependencies they removed
    - for a node whose cited code changed, check it still fits; to re-anchor it, send its cites again in an update_node op
    - remove nodes whose code is gone
-4. Change only what these changes require. Do not reorganise the rest of the map. If nothing architectural changed, propose nothing and say so in one sentence.
+4. Change only what these changes require. Do not reorganise the rest of the map. If nothing architectural changed, still re-anchor every node map_status reports as drifted (cite-moved or cite-missing), propose nothing else, and say so in one sentence.
 5. A reviewer applies proposals within a second or two. Call map_status to confirm one was applied before building on it.
 
 Do not modify any files. The map is the deliverable.`;

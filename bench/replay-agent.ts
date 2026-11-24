@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -37,7 +37,7 @@ export interface CheckpointResult {
   /** Removals and edits with no cause in this checkpoint's code changes. */
   churn: string[];
   /** Nodes whose only change was re-sending cites while they had open drift: maintenance, never over-reaction. */
-  reanchored: string[];
+  reanchored?: string[];   // absent in runs recorded before it existed
   signalsAfter: number;
   approver: { applied: number; rejected: number; reasons: string[] };
   audit?: Audit;
@@ -265,6 +265,30 @@ export async function replayAgent(o: RunOptions): Promise<ReplayRun> {
 const ratio = (a: number, b: number) => (b ? `${a}/${b}` : "-");
 const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) + "%" : "n/a");
 
+/**
+ * Drift scored once per episode: an episode starts when a node is drifted at a checkpoint's start and was not still
+ * open from the previous checkpoint; it ends at the checkpoint where it is cleared. Counting a node again at every
+ * checkpoint it stays open would punish one skipped step many times over.
+ */
+export function driftEpisodes(r: ReplayRun) {
+  const open = new Map<string, number>();            // node -> checkpoint index the episode started
+  const eps: { node: string; start: number; end: number | null }[] = [];
+  r.checkpoints.forEach((c, i) => {
+    for (const n of [...open.keys()]) if (!c.drift.open.includes(n)) { eps.push({ node: n, start: open.get(n)!, end: i - 1 }); open.delete(n); }   // went away without a re-anchor (e.g. code reverted)
+    for (const n of c.drift.open) if (!open.has(n)) open.set(n, i);
+    for (const n of c.drift.cleared) if (open.has(n)) { eps.push({ node: n, start: open.get(n)!, end: i }); open.delete(n); }
+  });
+  for (const [n, s] of open) eps.push({ node: n, start: s, end: null });
+  const fixed = eps.filter((e) => e.end !== null);
+  const life = (e: { start: number; end: number | null }) => (e.end ?? r.checkpoints.length - 1) - e.start + 1;
+  return {
+    episodes: eps.length, sameCheckpoint: eps.filter((e) => e.end === e.start).length, eventually: fixed.length, unresolved: eps.length - fixed.length,
+    /** Checkpoints an episode stayed open, counting the one it started in. 1 = fixed straight away. */
+    meanLife: eps.length ? eps.reduce((a, e) => a + life(e), 0) / eps.length : 0,
+    list: eps,
+  };
+}
+
 export function totals(r: ReplayRun) {
   const sum = (f: (c: CheckpointResult) => number) => r.checkpoints.reduce((a, c) => a + f(c), 0);
   const of = (e: string) => r.checkpoints.filter((c) => c.expect === e);
@@ -272,10 +296,12 @@ export function totals(r: ReplayRun) {
   return {
     newOpen: sum((c) => c.newCode.open.length - c.newCode.carried.length), newMapped: sum((c) => c.newCode.mapped.filter((p) => !c.newCode.carried.includes(p)).length),
     driftOpen: sum((c) => c.drift.open.length), driftCleared: sum((c) => c.drift.cleared.length),
+    drift: driftEpisodes(r),
     depsEval: sum((c) => c.deps.evaluable), depsHit: sum((c) => c.deps.hit), depsLenient: sum((c) => c.deps.hitLenient), depsUneval: sum((c) => c.deps.unevaluable.length),
     churn: sum((c) => c.churn.length),
     /** Any map change on a control checkpoint is an over-reaction: nothing architectural happened. */
-    controlChanges: of("control").reduce((a, c) => a + changed(c) - c.reanchored.length, 0), controls: of("control").length,
+    // runs recorded before `reanchored` existed: approximate it as changed nodes that had open drift
+    controlChanges: of("control").reduce((a, c) => a + changed(c) - (c.reanchored ?? c.changes.nodesChanged.filter((id) => c.drift.open.includes(id))).length, 0), controls: of("control").length,
     /** Informational: re-anchoring drift on a noise checkpoint is correct, so this is not a penalty. */
     noiseChanges: of("noise").reduce((a, c) => a + changed(c), 0),
     rejected: sum((c) => c.approver.rejected),
@@ -289,7 +315,7 @@ export function runMarkdown(r: ReplayRun): string {
     "",
     `prompt ${r.promptHash} / golden ${r.goldenHash} / estimated API cost $${r.costUsd.toFixed(2)} (not billed on a subscription)${r.tainted ? " / TAINTED" : ""}`,
     "",
-    "| # | checkpoint | expect | new code mapped | drift cleared | new deps drawn (strict / either way) | unevaluable deps | churn | map changes | rejected |",
+    "| # | checkpoint | expect | new code mapped | drifted nodes cleared | new deps drawn (strict / either way) | unevaluable deps | churn | map changes | rejected |",
     "|---|---|---|---|---|---|---|---|---|---|",
     ...r.checkpoints.map((c, i) => {
       const ch = c.changes;
@@ -297,7 +323,8 @@ export function runMarkdown(r: ReplayRun): string {
       return `| ${i + 1} | ${c.label} | ${c.expect} | ${ratio(c.newCode.mapped.length, c.newCode.open.length)} | ${ratio(c.drift.cleared.length, c.drift.open.length)} | ${ratio(c.deps.hit, c.deps.evaluable)} / ${ratio(c.deps.hitLenient, c.deps.evaluable)} | ${c.deps.unevaluable.length} | ${c.churn.length} | ${n} | ${c.approver.rejected}${c.tainted ? " TAINTED" : ""} |`;
     }),
     "",
-    `**Totals.** New code mapped ${pct(t.newMapped, t.newOpen)} (${t.newMapped}/${t.newOpen}, not counting carry-overs). Drift cleared ${pct(t.driftCleared, t.driftOpen)}. ` +
+    `**Totals.** New code mapped ${pct(t.newMapped, t.newOpen)} (${t.newMapped}/${t.newOpen}, not counting carry-overs). ` +
+      `Drift: ${t.drift.episodes} episodes, ${t.drift.sameCheckpoint} fixed in the checkpoint they appeared, ${t.drift.eventually} fixed eventually, ${t.drift.unresolved} never; mean ${t.drift.meanLife.toFixed(1)} checkpoints open. ` +
       `New dependencies drawn ${pct(t.depsHit, t.depsEval)} strict, ${pct(t.depsLenient, t.depsEval)} either way (${t.depsUneval} more had an endpoint no node covers). ` +
       `Churn ${t.churn}. Map changes on the ${t.controls} control checkpoints: ${t.controlChanges} (should be 0). On noise checkpoints: ${t.noiseChanges}. Rejected proposals ${t.rejected}.`,
     "",
@@ -319,10 +346,11 @@ export function runMarkdown(r: ReplayRun): string {
 }
 
 export function summaryMarkdown(runs: ReplayRun[]): string {
-  const rows = ["| run | agent | new code mapped | drift cleared | new deps (strict / either) | churn | changes on controls | golden preserved: nodes | golden preserved: edges (strict / lenient) | est. API cost |", "|---|---|---|---|---|---|---|---|---|---|"];
+  const rows = ["| run | agent | prompt | new code mapped | drift fixed in same checkpoint | drift fixed eventually | mean checkpoints drifted | new deps (strict / either) | churn | changes on controls | golden kept: nodes / edges | est. API cost |", "|---|---|---|---|---|---|---|---|---|---|---|---|"];
   for (const r of runs) {
     const t = totals(r), s = r.final.score;
-    rows.push(`| ${r.runId}${r.tainted ? " (TAINTED)" : ""} | ${r.agent} | ${pct(t.newMapped, t.newOpen)} | ${pct(t.driftCleared, t.driftOpen)} | ${pct(t.depsHit, t.depsEval)} / ${pct(t.depsLenient, t.depsEval)} | ${t.churn} | ${t.controlChanges} | ${s.nodes.recall} | ${s.edges.recall} / ${s.edges.recallLenient} | $${r.costUsd.toFixed(2)} |`);
+    const d = t.drift;
+    rows.push(`| ${r.runId}${r.tainted ? " (TAINTED)" : ""} | ${r.agent} | ${r.promptHash.slice(0, 6)} | ${pct(t.newMapped, t.newOpen)} | ${ratio(d.sameCheckpoint, d.episodes)} | ${ratio(d.eventually, d.episodes)} | ${d.meanLife.toFixed(1)} | ${pct(t.depsHit, t.depsEval)} / ${pct(t.depsLenient, t.depsEval)} | ${t.churn} | ${t.controlChanges} | ${s.nodes.recall} / ${s.edges.recall} | $${r.costUsd.toFixed(2)} |`);
   }
   return rows.join("\n") + "\n";
 }
@@ -333,13 +361,22 @@ if (import.meta.main) {
   const { values: v } = parseArgs({
     options: { config: { type: "string" }, agent: { type: "string", default: "oracle" }, label: { type: "string" }, runs: { type: "string", default: "1" },
       budget: { type: "string" }, model: { type: "string" }, "timeout-min": { type: "string", default: "15" }, "dry-run": { type: "boolean", default: false },
-      "allow-api-billing": { type: "boolean", default: false } },
+      "allow-api-billing": { type: "boolean", default: false }, rescore: { type: "boolean", default: false } },
     strict: true,
   });
   const USAGE = `usage: node bench/replay-agent.ts --config <bench>/replay/<repo>.yaml --label <name> [--agent oracle|idle|claude] [--runs N]
   --budget USD    cap PER CHECKPOINT on Claude Code's estimated API cost (required for claude; on a subscription it caps usage, not money)
   --allow-api-billing  run even if the session would bill an API key instead of your subscription
-  --model alias   --timeout-min N (per checkpoint, default 15)   --dry-run  print each checkpoint's prompt, run nothing`;
+  --model alias   --timeout-min N (per checkpoint, default 15)   --dry-run  print each checkpoint's prompt, run nothing
+  --rescore       rebuild every stored run's report with the current scoring (needs only --config)`;
+  if (v.config && v.rescore) {
+    // Rebuild every stored run's report from its run.json with the current scoring (no agent, no cost).
+    const base = join(resolve(dirname(v.config), ".."), "results", "replay", loadConfig(v.config).repo);
+    const runs = readdirSync(base).filter((d) => existsSync(join(base, d, "run.json"))).sort()
+      .map((d) => { const r = JSON.parse(readFileSync(join(base, d, "run.json"), "utf8")) as ReplayRun; writeFileSync(join(base, d, "report.md"), runMarkdown(r)); return r; });
+    console.log(summaryMarkdown(runs.filter((r) => r.agent === "claude")));
+    process.exit(0);
+  }
   if (!v.config || !v.label || !["oracle", "idle", "claude"].includes(v.agent!)) { console.error(USAGE); process.exit(2); }
   const cfg = loadConfig(v.config);
   if (v["dry-run"]) {
