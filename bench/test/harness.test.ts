@@ -161,11 +161,11 @@ test("the task prompt does not name or hint at any component of the repos under 
 test("report: tainted runs are counted but excluded from the means", () => {
   const mk = (recall: number, tainted: boolean): RunRecord => ({
     repo: "gopass", runId: String(Math.random()), label: "cold", agent: "claude", promptHash: "abc", goldenHash: "g1", commit: "x", finished: "", wallMs: 1, tainted, taintReasons: [],
-    score: { repo: "gopass", nodes: { golden: 3, citable: 3, matched: 0, recall, missed: [], byName: [] }, edges: { golden: 2, scored: 2, hit: 0, reversed: 0, recall: recall / 2, evaluable: 0, missed: [] }, extras: { count: 4, ids: [] }, cites: { total: 1, valid: 1, validity: 1, groundedNodes: 1, nodes: 1 } },
+    score: { repo: "gopass", scorerVersion: 2, nodes: { golden: 3, citable: 3, matched: 0, recall, missed: [], byName: [], byTier: { core: { citable: 2, matched: 0, recall, missed: [] }, peripheral: { citable: 1, matched: 0, recall: 0, missed: [] } } }, edges: { golden: 2, scored: 2, hit: 0, reversed: 0, recall: recall / 2, hitLenient: 0, recallLenient: recall, evaluable: 0, missed: [] }, extras: { count: 4, ids: [] }, cites: { total: 1, valid: 1, validity: 1, groundedNodes: 1, nodes: 1 } },
     final: { rev: 3, nodes: 3, edges: 2, signals: {} }, approver: { applied: 3, rebased: 1, rejected: 0, reasons: [] }, audit: { toolCalls: {}, toolErrors: {}, outside: [], disallowed: [], grantedExtra: [], deniedAttempts: [], costUsd: 1.5 },
   });
   const out = summarize([mk(0.5, false), mk(0.7, false), mk(0.99, true)]);
-  assert.match(out, /\| gopass \/ cold \/ prompt abc \/ golden g1 \| 2\/1 \|/, "one cell for the setup, then 2 clean / 1 tainted");
+  assert.match(out, /\| gopass \/ cold \/ prompt abc \/ golden g1 \/ scorer v2 \| 2\/1 \|/, "one cell for the setup, then 2 clean / 1 tainted");
   assert.match(out, /0\.60 \[0\.50-0\.70\]/, "tainted 0.99 is left out");
   assert.match(out, /\$4\.50/, "cost counts every run, tainted or not");
   assert.match(out, /read the spread/);
@@ -245,4 +245,15 @@ test("rescore: a changed golden changes the score and its hash; the agent's map 
   assert.equal(second.audit!.costUsd, 0.5, "cost untouched");
   assert.equal(second.final.rev, first.final.rev, "the run's own record untouched");
   t.done();
+});
+
+test("report: a tier with no golden nodes shows n/a, not 0%", () => {
+  const rec = (): RunRecord => ({
+    repo: "swagger-php", runId: "r", label: "cold", agent: "claude", promptHash: "abc", goldenHash: "g", commit: "x", finished: "", wallMs: 1, tainted: false, taintReasons: [],
+    score: { repo: "x", scorerVersion: 2, nodes: { golden: 2, citable: 2, matched: 1, recall: 0.5, missed: [], byName: [], byTier: { core: { citable: 2, matched: 1, recall: 0.5, missed: [] }, peripheral: { citable: 0, matched: 0, recall: 0, missed: [] } } }, edges: { golden: 1, scored: 1, hit: 0, reversed: 0, recall: 0, hitLenient: 0, recallLenient: 0, evaluable: 0, missed: [] }, extras: { count: 0, ids: [] }, cites: { total: 1, valid: 1, validity: 1, groundedNodes: 1, nodes: 1 } },
+    final: { rev: 1, nodes: 2, edges: 1, signals: {} }, approver: { applied: 1, rebased: 0, rejected: 0, reasons: [] },
+  });
+  const row = summarize([rec()]).split("\n").find((l) => l.startsWith("| swagger-php"))!.split("|").map((c) => c.trim());
+  assert.equal(row[5], "0.50 [0.50-0.50]", "core");
+  assert.equal(row[6], "n/a", "peripheral");
 });
