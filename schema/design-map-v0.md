@@ -8,6 +8,7 @@ Working name: `.design/` (repo name still undecided).
 .design/
   map.yaml            # current state. Source of truth. Agent proposes, human applies.
   pins.yaml           # human-only channel. The agent has no write path to it.
+  coverage.yaml       # optional, human-only: which folders hold code, and code a human chose not to map
   proposals/          # pending agent changes, one file each, never auto-applied
     0007.yaml
   history/            # append-only, one file per applied change
@@ -90,14 +91,30 @@ Ops allowed: `add_node`, `update_node`, `remove_node`, `add_edge`, `update_edge`
   "signals": [
     { "node": "api", "type": "cite-moved",   "severity": "warn", "detail": "src/api/checkout.ts changed since a1b2c3d" },
     { "node": "queue", "type": "no-cite",    "severity": "info", "detail": "in-progress node has no code reference" },
-    { "node": "db",    "type": "cite-missing","severity": "high", "detail": "src/db/orders.ts deleted" }
+    { "node": "db",    "type": "cite-missing","severity": "high", "detail": "src/db/orders.ts deleted" },
+    { "node": "", "path": "src/billing", "type": "uncovered", "severity": "warn", "detail": "src/billing: 6 source files in 2 folders that no node covers" }
   ]
 }
 ```
 
 Signal types in v0 (all deterministic, no model judgement):
-`cite-moved`, `cite-missing`, `no-cite`, `stale-planned` (still planned 5 revs later).
+`cite-moved`, `cite-missing`, `no-cite`, `stale-planned` (still planned 5 revs later), and `uncovered`
+(only when `coverage.yaml` exists: a source folder under a watched root that no cite covers and no human
+acknowledged; `node` is empty and `path` names the folder; a folder and its uncovered sub-folders are one signal).
 Deferred: `orphan-edge` (validation already forbids it) and `unpinned-after-human-edit`.
+
+## coverage.yaml (optional, human-only)
+
+```yaml
+roots: [internal, pkg]        # folders where code lives, relative to the repo root ("." = everything)
+extensions: [.go]             # files that count as source; tests, testdata, vendor and dotfiles never count
+acknowledged: [internal/legacy, pkg/debug]   # seen, deliberately unmapped; everything inside is ignored
+```
+
+Cite signals only watch code the map already points at, so a new component is invisible to them. This file
+closes that gap. `design-loop coverage .go internal pkg` creates it and acknowledges everything uncovered at
+that moment, so only code that appears later is flagged. A signal clears when an applied proposal cites the
+folder, or when a human runs `design-loop ack <folder>`. Like pins, no agent-facing path writes this file.
 
 ## Views
 
@@ -112,7 +129,7 @@ Deferred: `orphan-edge` (validation already forbids it) and `unpinned-after-huma
 1. `role` is a closed vocabulary per kind (see `core/src/types.ts`).
 2. Cites store a content hash of the cited lines, trailing whitespace ignored. Filled in when a change is applied.
 3. Every change needs human approval. There is no auto-apply.
-4. `pins.yaml` and `locked_labels` are human-only; no agent-facing path writes them.
+4. `pins.yaml`, `locked_labels` and `coverage.yaml` are human-only; no agent-facing path writes them.
 
 ## Behaviour notes (implemented in core)
 

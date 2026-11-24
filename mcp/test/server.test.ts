@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { apply, initMap, listProposals, loadMap, loadPins, savePins } from "../../core/src/index.ts";
+import { apply, initMap, listProposals, loadMap, loadPins, saveCoverage, savePins } from "../../core/src/index.ts";
 import { createServer } from "../src/server.ts";
 
 async function setup() {
@@ -96,5 +96,17 @@ test("history, diff and explain_node reflect applied changes", async () => {
   assert.deepEqual(x.data.pending.map((p: { id: number }) => p.id), [pend.data.proposal]);
   assert.equal(x.data.edges_in[0].id, "e1");
   assert.equal((await t.call("map_explain_node", { id: "nope" })).data.code, "NOT_FOUND");
+  t.done();
+});
+
+test("map_status lists uncovered code; no tool can change coverage", async () => {
+  const t = await setup();
+  saveCoverage(t.root, { roots: ["internal"], extensions: [".go"], acknowledged: [] });
+  mkdirSync(join(t.root, "internal/svc"), { recursive: true }); writeFileSync(join(t.root, "internal/svc/s.go"), "x\n");
+  const s = await t.call("map_status");
+  assert.deepEqual(s.data.uncovered.map((u: { path: string }) => u.path), ["internal/svc"]);
+  assert.equal(s.data.signals.warn, 1);
+  const names = (await t.client.listTools()).tools.map((x) => x.name);
+  assert.ok(!names.some((n) => /ack|coverage/.test(n)));
   t.done();
 });

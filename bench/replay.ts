@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
-import { apply, computeSignals, initMap, loadMap, propose } from "../core/src/index.ts";
+import { apply, baseline, computeSignals, initMap, loadCoverage, loadMap, propose, saveCoverage } from "../core/src/index.ts";
 import type { Op, Signal } from "../core/src/index.ts";
 import { loadGolden } from "./score.ts";
 import type { Golden, GoldenNode } from "./score.ts";
@@ -146,6 +146,8 @@ export interface ReplayConfig {
   strip: string[];
   /** Golden nodes that do not exist at the base commit (created during the window). */
   dropAtBase?: string[];
+  /** Folders and extensions for design-loop's "uncovered" signal. Enabled at the base commit with today's gaps acknowledged. */
+  coverage?: { roots: string[]; extensions: string[] };
   checkpoints: Checkpoint[];
 }
 
@@ -185,20 +187,29 @@ const describe = {
 };
 
 export function judge(evs: Events, signals: Signal[], nodes: Pathed[]): Pick<CheckpointSignals, "noticed" | "silent" | "outside" | "noise"> {
-  const flagged = new Set(signals.map((s) => s.node));
+  const flagged = new Set(signals.filter((s) => s.node).map((s) => s.node));
+  const uncov = signals.filter((s) => s.type === "uncovered" && s.path).map((s) => s.path!);
   const containing = (pkg: string) => nodes.filter((n) => (n.paths ?? []).some((p) => under(pkg, p))).map((n) => n.id);
-  const involved = new Set<string>();
+  const involvedNodes = new Set<string>(), involvedPaths = new Set<string>();
   const noticed: string[] = [], silent: string[] = [], outside: string[] = [];
-  const put = (text: string, nodeIds: string[]) => {
-    nodeIds.forEach((n) => involved.add(n));
-    (!nodeIds.length ? outside : nodeIds.some((n) => flagged.has(n)) ? noticed : silent).push(text);
+  /** nodeIds: map nodes involved. pkgs: packages involved that no node covers. */
+  const put = (text: string, nodeIds: string[], pkgs: string[]) => {
+    nodeIds.forEach((n) => involvedNodes.add(n));
+    const byUncov = uncov.filter((u) => pkgs.some((p) => under(p, u)));
+    byUncov.forEach((u) => involvedPaths.add(u));
+    if (nodeIds.some((n) => flagged.has(n)) || byUncov.length) noticed.push(text);
+    else (nodeIds.length ? silent : outside).push(text);
   };
-  for (const e of evs.newPkgs) put(describe.newPkg(e), containing(e.pkg));
-  for (const e of evs.removedPkgs) put(describe.removedPkg(e), containing(e.pkg));
+  for (const e of evs.newPkgs) put(describe.newPkg(e), containing(e.pkg), e.node ? [] : [e.pkg]);
+  for (const e of evs.removedPkgs) put(describe.removedPkg(e), containing(e.pkg), e.node ? [] : [e.pkg]);
   const real = (id: string) => (id.startsWith("?") ? [] : [id]);
-  for (const e of evs.edgesAdded) put(describe.edge(e, "+"), [...real(e.from), ...real(e.to)]);
-  for (const e of evs.edgesRemoved) put(describe.edge(e, "-"), [...real(e.from), ...real(e.to)]);
-  return { noticed, silent, outside, noise: [...flagged].filter((n) => !involved.has(n)).sort() };
+  const loose = (id: string) => (id.startsWith("?") ? [id.slice(1)] : []);
+  for (const e of evs.edgesAdded) put(describe.edge(e, "+"), [...real(e.from), ...real(e.to)], [...loose(e.from), ...loose(e.to)]);
+  for (const e of evs.edgesRemoved) put(describe.edge(e, "-"), [...real(e.from), ...real(e.to)], [...loose(e.from), ...loose(e.to)]);
+  return {
+    noticed, silent, outside,
+    noise: [...[...flagged].filter((n) => !involvedNodes.has(n)), ...uncov.filter((u) => !involvedPaths.has(u)).map((u) => `uncovered ${u}`)].sort(),
+  };
 }
 
 function mapOps(g: Golden): Op[] {
@@ -213,7 +224,9 @@ function mapOps(g: Golden): Op[] {
 }
 
 /** Re-anchor the cites of flagged nodes, as a maintainer who acknowledged the change would. Missing paths are dropped. */
-function reanchor(work: string, flagged: Set<string>) {
+function reanchor(work: string, flagged: Set<string>, newlyUncovered: string[]) {
+  const cov = loadCoverage(work);
+  if (cov && newlyUncovered.length) saveCoverage(work, { ...cov, acknowledged: [...cov.acknowledged, ...newlyUncovered] });
   const map = loadMap(work);
   const ops: Op[] = map.nodes.filter((n) => flagged.has(n.id) && n.cites?.length).map((n) => ({
     op: "update_node", id: n.id, set: { cites: n.cites!.filter((c) => existsSync(join(work, c.path))).map((c) => ({ path: c.path })) },
@@ -221,14 +234,20 @@ function reanchor(work: string, flagged: Set<string>) {
   if (ops.length) apply(work, propose(work, { base_rev: map.rev, source: { kind: "import", summary: "replay: re-anchor acknowledged cites" }, ops }).id);
 }
 
-export interface SignalsReport { repo: string; base: string; golden: string; checkpoints: CheckpointSignals[]; work: string }
+export interface SignalsReport { repo: string; base: string; golden: string; coverage: boolean; checkpoints: CheckpointSignals[]; work: string }
 
-export function replaySignals(cfg: ReplayConfig, work = mkdtempSync(join(tmpdir(), "dl-replay-"))): SignalsReport {
+export function replaySignals(cfg: ReplayConfig, opts: { coverage?: boolean; work?: string } = {}): SignalsReport {
+  const work = opts.work ?? mkdtempSync(join(tmpdir(), "dl-replay-"));
+  const useCoverage = (opts.coverage ?? true) && !!cfg.coverage;
   const golden = goldenAtBase(loadGolden(cfg.golden), cfg.dropAtBase ?? []);
   const nodes = golden.nodes.filter((n) => n.citable !== false && n.paths?.length);
   materialize(cfg.source, cfg.base, work, cfg.strip);
   initMap(work, "architecture", `${cfg.repo} replay from ${cfg.base}`);
   apply(work, propose(work, { base_rev: 0, source: { kind: "import", summary: "golden map adjusted to the base commit" }, ops: mapOps(golden) }).id);
+  if (useCoverage) {
+    const c = { ...cfg.coverage!, acknowledged: [] };
+    saveCoverage(work, { ...c, acknowledged: baseline(work, loadMap(work), c) });
+  }
   let prev = gitState(cfg.source, cfg.base);
   const out: CheckpointSignals[] = [];
   for (const cp of cfg.checkpoints) {
@@ -237,34 +256,35 @@ export function replaySignals(cfg: ReplayConfig, work = mkdtempSync(join(tmpdir(
     const evs = events(prev, cur, nodes);
     const signals = computeSignals(work);
     out.push({ label: cp.label, commit: cp.commit, expect: cp.expect, events: evs, signals, ...judge(evs, signals, nodes) });
-    reanchor(work, new Set(signals.map((s) => s.node)));
+    reanchor(work, new Set(signals.filter((s) => s.node).map((s) => s.node)), signals.filter((s) => s.type === "uncovered").map((s) => s.path!));
     prev = cur;
   }
-  return { repo: cfg.repo, base: cfg.base, golden: cfg.golden, checkpoints: out, work };
+  return { repo: cfg.repo, base: cfg.base, golden: cfg.golden, coverage: useCoverage, checkpoints: out, work };
 }
 
 export function signalsMarkdown(r: SignalsReport): string {
   const tot = (k: "noticed" | "silent" | "outside" | "noise") => r.checkpoints.reduce((a, c) => a + c[k].length, 0);
   const newUncovered = r.checkpoints.reduce((a, c) => a + c.events.newPkgs.filter((e) => !e.node).length, 0);
   const rows = [
-    `# Replay, layer 1 (signals only): ${r.repo} from ${r.base.slice(0, 8)}`,
+    `# Replay, layer 1 (signals only): ${r.repo} from ${r.base.slice(0, 8)}, coverage signal ${r.coverage ? "ON" : "OFF"}`,
     "",
-    "| # | checkpoint | expect | changes | touching the map: noticed | touching the map: silent | outside the map | flagged nodes | noise |",
+    "| # | checkpoint | expect | changes | noticed | silent, a node involved | silent, no node involved | signals | noise |",
     "|---|---|---|---|---|---|---|---|---|",
-    ...r.checkpoints.map((c, i) => `| ${i + 1} | ${c.label} (${c.commit.slice(0, 8)}) | ${c.expect} | ${eventCount(c.events)} | ${c.noticed.length} | ${c.silent.length} | ${c.outside.length} | ${new Set(c.signals.map((s) => s.node)).size} | ${c.noise.length} |`),
+    ...r.checkpoints.map((c, i) => `| ${i + 1} | ${c.label} (${c.commit.slice(0, 8)}) | ${c.expect} | ${eventCount(c.events)} | ${c.noticed.length} | ${c.silent.length} | ${c.outside.length} | ${c.signals.length} | ${c.noise.length} |`),
     `| | **total** | | ${r.checkpoints.reduce((a, c) => a + eventCount(c.events), 0)} | **${tot("noticed")}** | **${tot("silent")}** | **${tot("outside")}** | | **${tot("noise")}** |`,
     "",
-    "Noticed: a signal fired on a node involved in the change. Silent: the change involves a node, but no signal pointed at it. Outside: no node is involved, so no cite-based signal can see it",
-    `(${newUncovered} of these are new packages no node covers). Noise: a flagged node involved in no architectural change.`,
+    "Noticed: a signal fired on a node involved in the change, or an \"uncovered\" signal named a package involved in it. Silent: no signal pointed at it,",
+    `split by whether a map node is involved. ${newUncovered} of the changes are new packages no node covers. Noise: a signal tied to no architectural change.`,
     "",
   ];
   r.checkpoints.forEach((c, i) => {
     if (!eventCount(c.events) && !c.noise.length) return;
     rows.push(`## ${i + 1}. ${c.label}`, "");
-    for (const s of c.silent) rows.push(`- SILENT: ${s}`);
-    for (const s of c.outside) rows.push(`- outside: ${s}`);
+    for (const s of c.silent) rows.push(`- SILENT, node involved: ${s}`);
+    for (const s of c.outside) rows.push(`- silent, no node involved: ${s}`);
     for (const s of c.noticed) rows.push(`- noticed: ${s}`);
     for (const s of c.noise) rows.push(`- noise: ${s} flagged, no architectural change`);
+    for (const g of c.signals.filter((x) => x.type === "uncovered")) rows.push(`- signal: ${g.detail}`);
     rows.push("");
   });
   return rows.join("\n");
@@ -303,13 +323,19 @@ if (import.meta.main) {
       console.log(`${t.commit.slice(0, 8)} ${t.date} ${t.goChanged ? "go" : "--"} ${String(n).padStart(2)}  ${t.subject.slice(0, 90)}`);
     }
   } else {
-    const r = replaySignals(cfg);
+    const runs = cfg.coverage ? [replaySignals(cfg, { coverage: false }), replaySignals(cfg, { coverage: true })] : [replaySignals(cfg)];
     const dir = join(resolve(dirname(cfgFile), ".."), "results", "replay", cfg.repo, `signals-${Date.now().toString(36)}`);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "signals.json"), JSON.stringify(r, null, 2) + "\n");
-    const md = signalsMarkdown(r);
-    writeFileSync(join(dir, "signals.md"), md);
-    rmSync(r.work, { recursive: true, force: true });
-    console.log(md + `\n-> ${dir}`);
+    const sum = (r: SignalsReport, k: "noticed" | "silent" | "outside" | "noise") => r.checkpoints.reduce((a, c) => a + c[k].length, 0);
+    const cmp = ["| coverage signal | changes | noticed | silent, node involved | silent, no node involved | noise | signals on controls |", "|---|---|---|---|---|---|---|",
+      ...runs.map((r) => `| ${r.coverage ? "on" : "off"} | ${r.checkpoints.reduce((a, c) => a + eventCount(c.events), 0)} | ${sum(r, "noticed")} | ${sum(r, "silent")} | ${sum(r, "outside")} | ${sum(r, "noise")} | ${r.checkpoints.filter((c) => c.expect === "control").reduce((a, c) => a + c.signals.length, 0)} |`)].join("\n");
+    for (const r of runs) {
+      const tag = r.coverage ? "coverage-on" : "coverage-off";
+      writeFileSync(join(dir, `${tag}.json`), JSON.stringify(r, null, 2) + "\n");
+      writeFileSync(join(dir, `${tag}.md`), signalsMarkdown(r));
+      rmSync(r.work, { recursive: true, force: true });
+    }
+    writeFileSync(join(dir, "compare.md"), cmp + "\n");
+    console.log(`${cmp}\n\n${signalsMarkdown(runs.at(-1)!)}\n-> ${dir}`);
   }
 }

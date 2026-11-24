@@ -2,9 +2,11 @@ import { writeFileSync } from "node:fs";
 import type { MapDoc } from "./types.ts";
 import { citeHash, mapAtRev } from "./flow.ts";
 import { loadMap, paths } from "./store.ts";
+import { loadCoverage, uncovered } from "./coverage.ts";
 
 export type Severity = "info" | "warn" | "high";
-export interface Signal { node: string; type: string; severity: Severity; detail: string }
+/** `node` is empty for signals about code rather than a node (type "uncovered"); `path` then names the code. */
+export interface Signal { node: string; type: string; severity: Severity; detail: string; path?: string }
 export const STALE_PLANNED_REVS = 5;
 
 /** Deterministic checks only. No model judgement. */
@@ -30,8 +32,13 @@ export function computeSignals(root: string, map: MapDoc = loadMap(root)): Signa
   for (const [id, r] of since) {
     if (map.rev - r >= STALE_PLANNED_REVS) out.push({ node: id, type: "stale-planned", severity: "info", detail: `planned since rev ${r}, ${map.rev - r} revs ago` });
   }
+  // uncovered: source folders under the configured roots that no cite covers and no human acknowledged
+  const cov = loadCoverage(root);
+  if (cov) for (const u of uncovered(root, map, cov)) {
+    out.push({ node: "", path: u.path, type: "uncovered", severity: "warn", detail: `${u.path}: ${u.files} source file${u.files === 1 ? "" : "s"} in ${u.folders} folder${u.folders === 1 ? "" : "s"} that no node covers` });
+  }
   const rank = { high: 0, warn: 1, info: 2 } as const;
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity] || a.node.localeCompare(b.node));
+  return out.sort((a, b) => rank[a.severity] - rank[b.severity] || a.node.localeCompare(b.node) || (a.path ?? "").localeCompare(b.path ?? ""));
 }
 
 export function writeSignals(root: string) {

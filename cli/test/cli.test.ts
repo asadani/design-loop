@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initMap, loadMap, loadPins, listProposals, propose } from "../../core/src/index.ts";
+import { initMap, loadCoverage, loadMap, loadPins, listProposals, propose } from "../../core/src/index.ts";
 import type { Op } from "../../core/src/index.ts";
 import { run } from "../src/cli.ts";
 import type { Env } from "../src/cli.ts";
@@ -146,5 +146,34 @@ test("unknown command exits 2 with help", async () => {
   const h = harness();
   assert.equal(await run(["frobnicate"], h.env), 2);
   assert.match(h.e(), /Decide \(human only/);
+  h.done();
+});
+
+test("coverage + ack: human only, baseline on enable, ack only open findings, stop hook blocks on new code", async () => {
+  const h = harness({ stdin: "{}" });
+  const put = (f: string) => { mkdirSync(join(h.root, f, ".."), { recursive: true }); writeFileSync(join(h.root, f), "x\n"); };
+  put("internal/old/o.go");
+  const agent = { ...h.env, tty: false };
+  assert.equal(await run(["coverage", ".go", "internal"], agent), 1, "an agent's shell cannot enable or baseline coverage");
+  assert.ok(!existsSync(join(h.root, ".design", "coverage.yaml")));
+  assert.equal(await run(["coverage", "go", "internal"], h.env), 0);
+  assert.match(h.o(), /internal\/old \(1 files\)/);
+  assert.deepEqual(loadCoverage(h.root), { roots: ["internal"], extensions: [".go"], acknowledged: ["internal/old"] });
+
+  put("internal/new/n.go");
+  let out = ""; const env2 = { ...h.env, out: (s: string) => { out += s; } };
+  await run(["hook", "stop"], env2);
+  const j = JSON.parse(out);
+  assert.equal(j.decision, "block");
+  assert.match(j.reason, /internal\/new: uncovered/);
+  assert.match(j.reason, /add nodes for new code/);
+
+  assert.equal(await run(["ack", "internal/nope"], h.env), 1, "only open findings can be acknowledged");
+  assert.match(h.e(), /not an open "uncovered" finding/);
+  assert.equal(await run(["ack", "internal/new"], agent), 1, "an agent cannot acknowledge");
+  assert.equal(await run(["ack", "internal/new/"], h.env), 0);
+  assert.deepEqual(loadCoverage(h.root)!.acknowledged, ["internal/new", "internal/old"]);
+  let out3 = ""; await run(["hook", "stop"], { ...h.env, out: (s: string) => { out3 += s; } });
+  assert.equal(out3, "", "acknowledged: nothing to block on");
   h.done();
 });

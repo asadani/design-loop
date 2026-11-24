@@ -42,18 +42,20 @@ export function createServer(root: string): McpServer {
       "Read the map with map_read, then change it only with map_propose using the revision you read. " +
       "Proposals are never applied by you: a human reviews and applies them. " +
       "Never put layout (x, y, positions) in a proposal; layout is the human's. " +
-      "Nodes listed in locked_labels must not be renamed. Cite code with `cites` so drift can be detected.",
+      "Nodes listed in locked_labels must not be renamed. Cite code with `cites` so drift can be detected. " +
+      "If map_status lists `uncovered` folders, that is new code no node covers: propose a node citing it, or extend an existing node's cites.",
   });
 
   server.registerTool("map_status", {
     title: "Map status",
-    description: "Current revision, map kind, pending proposals (flagging stale ones), and a count of drift signals by severity. Call this first.",
+    description: "Current revision, map kind, pending proposals (flagging stale ones), a count of drift signals by severity, and `uncovered`: new source folders that no node covers yet. Call this first.",
     inputSchema: {},
   }, guard(() => {
     const s = status(root);
     const by = { high: 0, warn: 0, info: 0 };
-    for (const g of computeSignals(root)) by[g.severity]++;
-    return { ...s, signals: by };
+    const all = computeSignals(root);
+    for (const g of all) by[g.severity]++;
+    return { ...s, signals: by, uncovered: all.filter((g) => g.type === "uncovered").map((g) => ({ path: g.path, detail: g.detail })) };
   }));
 
   server.registerTool("map_read", {

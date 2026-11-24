@@ -8,8 +8,8 @@ import { diffMaps } from "./diff.ts";
 import type { MapDiff } from "./diff.ts";
 import { appendHistory, listHistory, listProposals, loadMap, loadPins, loadProposal, nextProposalId, saveMap, saveProposal } from "./store.ts";
 
-const SKIP_DIR = /^(\.|node_modules$|vendor$|testdata$|__tests?__$|tests?$)/;
-const SKIP_FILE = /(^\.|_test\.|\.test\.|\.spec\.|Test\.php$)/;
+export const SKIP_DIR = /^(\.|node_modules$|vendor$|testdata$|__tests?__$|tests?$)/;
+export const SKIP_FILE = /(^\.|_test\.|\.test\.|\.spec\.|Test\.php$)/;
 
 /** Sorted relative paths of non-test, non-hidden files under a directory. Symlinks are never followed. */
 function listTree(abs: string, rel = ""): string[] {

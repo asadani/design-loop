@@ -142,3 +142,23 @@ test("timeline reports per-commit events along first-parent history", () => {
   assert.deepEqual(t.map((x) => x.events.newPkgs.length), [1, 1, 0, 0]);
   r.done();
 });
+
+test("replaySignals with coverage: a new package no node covers is noticed, then acknowledged so it does not repeat", () => {
+  const r = repo();
+  const bench = mkdtempSync(join(tmpdir(), "dl-bench-"));
+  writeFileSync(join(bench, "golden.yaml"), stringify({ repo: "m", commit: r.c[4], nodes: NODES, edges: [{ from: "nb", to: "na" }] }));
+  const cfg: ReplayConfig = {
+    repo: "m", source: r.dir, golden: join(bench, "golden.yaml"), base: r.c[0], strip: ["docs"], coverage: { roots: ["."], extensions: [".go"] },
+    checkpoints: [{ commit: r.c[1], label: "add c", expect: "must" }, { commit: r.c[2], label: "add a/sub", expect: "may" }, { commit: r.c[3], label: "edit", expect: "control" }],
+  };
+  const off = replaySignals(cfg, { coverage: false });
+  const on = replaySignals(cfg, { coverage: true });
+  assert.equal(off.coverage, false); assert.equal(on.coverage, true);
+  assert.deepEqual(off.checkpoints[0].noticed, []);
+  assert.deepEqual(on.checkpoints[0].noticed.sort(), ["+ dependency nb -> ?c", "new package c (no node covers it)"]);
+  assert.deepEqual(on.checkpoints[0].signals.map((g) => [g.type, g.path]), [["uncovered", "c"]]);
+  assert.deepEqual(on.checkpoints[1].signals.map((g) => g.type), ["cite-moved"], "c is not reported again; only na's new sub-package");
+  assert.deepEqual(on.checkpoints[2].signals, [], "control: nothing");
+  for (const x of [off, on]) rmSync(x.work, { recursive: true });
+  rmSync(bench, { recursive: true }); r.done();
+});

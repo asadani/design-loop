@@ -7,3 +7,5 @@ export * from "./store.ts";
 export { propose, apply, reject, rebase, mapAtRev, diffRevs, status, citeHash } from "./flow.ts";
 export { computeSignals, writeSignals, STALE_PLANNED_REVS } from "./signals.ts";
 export type { Signal, Severity } from "./signals.ts";
+export { loadCoverage, saveCoverage, uncovered, baseline } from "./coverage.ts";
+export type { CoverageConfig, Uncovered } from "./coverage.ts";

@@ -108,7 +108,8 @@ function renderSide() {
   }
   kids.push(el("h2", { text: `Where it might go wrong (${state.signals.length})` }));
   if (!state.signals.length) kids.push(el("p", { class: "empty", text: "No drift detected." }));
-  for (const g of state.signals) kids.push(el("div", { class: "sig", onclick: () => { view.selected = g.node; render(); } }, el("span", { class: `sev ${g.severity}`, text: g.severity }), el("span", {}, el("b", { text: g.node }), ` ${g.type}: ${g.detail}`)));
+  // "uncovered" signals are about code, not a node: no node to select, show the path instead
+  for (const g of state.signals) kids.push(el("div", { class: "sig", ...(g.node ? { onclick: () => { view.selected = g.node; render(); } } : {}) }, el("span", { class: `sev ${g.severity}`, text: g.severity }), el("span", {}, el("b", { text: g.node || g.path || "" }), ` ${g.type}: ${g.detail}`)));
   const sel = view.selected && shown.map.nodes.find((n) => n.id === view.selected);
   if (sel) {
     const locked = state.pins.locked_labels.includes(sel.id), pinned = !!state.pins.pins[sel.id];
@@ -144,7 +145,7 @@ function renderCanvas() {
   svg.setAttribute("viewBox", `0 0 ${drawn.w} ${drawn.h}`);
   applyZoom();
   svg.classList.toggle("readonly", shown.readonly);
-  const sev = {}; for (const g of state.signals) if (!sev[g.node] || g.severity === "high") sev[g.node] = g.severity;
+  const sev = {}; for (const g of state.signals) if (g.node && (!sev[g.node] || g.severity === "high")) sev[g.node] = g.severity;
 
   const defs = s("defs", {}, s("marker", { id: "arrow", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, s("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--muted)" })));
   const groups = cur.groups.map((g) => {

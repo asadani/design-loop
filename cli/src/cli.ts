@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { apply, computeSignals, DesignError, diffRevs, initMap, KINDS, listHistory, loadMap, loadPins, loadProposal, paths, rebase, reject, savePins, status, writeSignals } from "../../core/src/index.ts";
+import { apply, baseline, computeSignals, DesignError, diffRevs, initMap, KINDS, listHistory, loadCoverage, loadMap, loadPins, loadProposal, paths, rebase, reject, saveCoverage, savePins, status, uncovered, writeSignals } from "../../core/src/index.ts";
 import type { Kind, Op, Proposal } from "../../core/src/index.ts";
 
 export interface Env {
@@ -31,6 +31,9 @@ Decide (human only: needs an interactive terminal, asks you to confirm):
   rebase <id>                  move a stale proposal onto the current revision
   pin <node> <x> <y> | unpin <node>
   lock <node> | unlock <node>  forbid / allow the agent renaming a node
+  coverage <exts> <root>...    watch for new code no node covers, e.g. "coverage .go internal pkg"
+                               (everything uncovered today is acknowledged; only later code is flagged)
+  ack <folder>...              acknowledge uncovered code you have seen and chose not to map
 
   view                         open the live viewer (prints a private link)
 
@@ -115,7 +118,7 @@ export async function run(argv: string[], env: Env): Promise<number> {
       }
       case "signals": {
         const s = writeSignals(root);
-        out(s.length ? s.map((g) => `${g.severity.padEnd(4)} ${g.node}  ${g.type}  ${g.detail}`).join("\n") + "\n" : "no signals\n");
+        out(s.length ? s.map((g) => `${g.severity.padEnd(4)} ${g.node || g.path}  ${g.type}  ${g.detail}`).join("\n") + "\n" : "no signals\n");
         return 0;
       }
       case "init": {
@@ -175,6 +178,32 @@ export async function run(argv: string[], env: Env): Promise<number> {
         out("ok\n");
         return 0;
       }
+      case "coverage": {
+        const [exts, ...roots] = a;
+        if (!exts || !roots.length) throw new DesignError("INVALID", "usage: coverage <exts, comma-separated> <root>...   e.g. coverage .go internal pkg");
+        const map = loadMap(root);
+        const draft = { roots, extensions: exts.split(",").map((e) => (e.startsWith(".") ? e : `.${e}`)), acknowledged: loadCoverage(root)?.acknowledged ?? [] };
+        const today = uncovered(root, map, draft);
+        out(`${today.length} folder group(s) under ${roots.join(", ")} are not covered by any node today:\n${today.map((u) => `  ${u.path} (${u.files} files)`).join("\n") || "  (none)"}\n`);
+        if (!(await needHuman(`watch ${roots.join(", ")} for ${draft.extensions.join(", ")} and acknowledge the ${today.length} group(s) above`))) return 1;
+        saveCoverage(root, { ...draft, acknowledged: baseline(root, map, draft) });
+        writeSignals(root);
+        out("ok: new code under these folders that no node covers will now raise an \"uncovered\" signal\n");
+        return 0;
+      }
+      case "ack": {
+        const cfg = loadCoverage(root);
+        if (!cfg) throw new DesignError("NOT_FOUND", 'coverage is not enabled; run "coverage <exts> <root>..." first');
+        if (!a.length) throw new DesignError("INVALID", "usage: ack <folder>...");
+        const open = uncovered(root, loadMap(root), cfg).map((u) => u.path);
+        const unknown = a.filter((f) => !open.includes(f.replace(/\/+$/, "")));
+        if (unknown.length) throw new DesignError("NOT_FOUND", `not an open "uncovered" finding: ${unknown.join(", ")}`, open.length ? [`open: ${open.join(", ")}`] : []);
+        if (!(await needHuman(`acknowledge ${a.join(", ")} as deliberately unmapped`))) return 1;
+        saveCoverage(root, { ...cfg, acknowledged: [...cfg.acknowledged, ...a.map((f) => f.replace(/\/+$/, ""))] });
+        writeSignals(root);
+        out("ok\n");
+        return 0;
+      }
       case "view": {
         // Human only: the session token is shown on this terminal and nowhere else.
         if (!env.tty) { env.err('refused: "view" needs an interactive terminal (the link carries a decision token).\n'); return 1; }
@@ -210,12 +239,12 @@ async function stopHook(env: Env): Promise<number> {
   let input: { stop_hook_active?: boolean } = {};
   try { input = JSON.parse((await env.stdin()) || "{}"); } catch { /* no/invalid stdin: treat as empty */ }
   const signals = writeSignals(env.root);
-  const drift = signals.filter((s) => s.type === "cite-moved" || s.type === "cite-missing");
+  const drift = signals.filter((s) => s.type === "cite-moved" || s.type === "cite-missing" || s.type === "uncovered");
   if (!drift.length || input.stop_hook_active) return 0;
-  const lines = drift.map((s) => `- ${s.node}: ${s.type} (${s.detail})`).join("\n");
+  const lines = drift.map((s) => `- ${s.node || s.path}: ${s.type} (${s.detail})`).join("\n");
   env.out(JSON.stringify({
     decision: "block",
-    reason: `The design map is out of date with the code you just changed:\n${lines}\nCall map_status and map_read, then map_propose to update the affected nodes (re-cite the code, or remove/rename nodes that no longer exist). If the map is still accurate, say so and stop.`,
+    reason: `The design map is out of date with the code you just changed:\n${lines}\nCall map_status and map_read, then map_propose to update the affected nodes (re-cite the code, remove/rename nodes that no longer exist, or add nodes for new code that no node covers). If the map is still accurate, say so and stop.`,
   }) + "\n");
   return 0;
 }

@@ -17,8 +17,8 @@ you place by hand stays where you put it.
   operations against a base revision, written to `.design/proposals/`.
 - Applying a proposal appends to `.design/history/`. Every entry records the session, the
   turn and a one-line reason.
-- `.design/signals.json` is computed from the code (cites that moved or went missing), not
-  from the model's opinion.
+- `.design/signals.json` is computed from the code (cites that moved or went missing, and, if you
+  enable coverage, new code that no node covers), not from the model's opinion.
 
 ## Use the MCP server
 
@@ -39,14 +39,17 @@ decisions, made in the CLI or the viewer.
 node cli/src/bin.ts init architecture "My system"   # in your repo, from a terminal
 node cli/src/bin.ts view                            # prints a private link; Ctrl-C to stop
 node cli/src/bin.ts status | review <id> | apply <id> | reject <id> | pin <node> <x> <y> | lock <node>
+node cli/src/bin.ts coverage .go internal pkg       # flag NEW code no node covers (today's gaps are acknowledged)
+node cli/src/bin.ts ack internal/goeol              # seen it, deliberately not mapping it
 ```
 
-Decision commands (`init`, `apply`, `reject`, `rebase`, `pin`, `lock`, `view`) refuse to run unless
+Decision commands (`init`, `apply`, `reject`, `rebase`, `pin`, `lock`, `coverage`, `ack`, `view`) refuse to run unless
 both stdin and stdout are a terminal, so an agent's shell cannot approve its own changes. The viewer
 binds to 127.0.0.1, needs a random per-session token that is only printed to your terminal, checks
 Host and Origin, and renders agent-written text with `textContent` under a strict CSP.
 
-Optional Stop hook (refreshes drift signals each turn; blocks once if code the map cites has changed):
+Optional Stop hook (refreshes drift signals each turn; blocks once if code the map cites has changed,
+or new code appeared that no node covers):
 
 ```json
 { "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "node /path/to/design-loop/cli/src/bin.ts hook stop" } ] } ] } }
