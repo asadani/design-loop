@@ -76,7 +76,7 @@ export function gitState(repo: string, commit: string): RepoState {
 // ---------------------------------------------------------------- architectural events between two states
 
 type Pathed = Pick<GoldenNode, "id" | "paths">;
-const under = (p: string, dir: string) => p === dir || p.startsWith(dir + "/");
+export const under = (p: string, dir: string) => p === dir || p.startsWith(dir + "/");
 
 /** The most specific node whose path contains the package, or null when no node covers it. */
 export function nodeFor(pkg: string, nodes: Pathed[]): string | null {
@@ -212,7 +212,7 @@ export function judge(evs: Events, signals: Signal[], nodes: Pathed[]): Pick<Che
   };
 }
 
-function mapOps(g: Golden): Op[] {
+export function mapOps(g: Golden): Op[] {
   const ops: Op[] = g.nodes.map((n) => ({
     op: "add_node",
     node: n.citable === false || !n.paths?.length

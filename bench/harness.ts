@@ -126,11 +126,11 @@ export function claudeArgs(o: { prompt: string; mcpConfigPath: string; budgetUsd
   ];
 }
 
-export async function runClaude(o: { work: string; out: string; budgetUsd: number; model?: string; timeoutMs: number; bin?: string }): Promise<{ exitCode: number | null; timedOut: boolean; transcript: string }> {
+export async function runClaude(o: { work: string; out: string; budgetUsd: number; model?: string; timeoutMs: number; bin?: string; prompt?: string; name?: string }): Promise<{ exitCode: number | null; timedOut: boolean; transcript: string }> {
   const cfg = join(o.out, "mcp.json");
   writeFileSync(cfg, mcpConfig(o.work));
-  const args = claudeArgs({ prompt: COLD_START_PROMPT, mcpConfigPath: cfg, budgetUsd: o.budgetUsd, model: o.model });
-  const transcript = join(o.out, "transcript.jsonl");
+  const args = claudeArgs({ prompt: o.prompt ?? COLD_START_PROMPT, mcpConfigPath: cfg, budgetUsd: o.budgetUsd, model: o.model });
+  const transcript = join(o.out, `${o.name ?? "transcript"}.jsonl`);
   const sink = createWriteStream(transcript);
   const child = spawn(o.bin ?? "claude", args, { cwd: o.work, stdio: ["ignore", "pipe", "pipe"], env: process.env });
   child.stdout.pipe(sink);
