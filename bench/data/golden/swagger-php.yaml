@@ -1,0 +1,52 @@
+# DRAFT golden map for swagger-php @ fd3b62e4. Source: docs/reference/architecture.md (removed from stripped/swagger-php,
+# along with the rest of docs/, AGENTS.md, CLAUDE.md, CONTEXT.md, ROADMAP.md). NEEDS HUMAN REVIEW before any run is scored.
+# v2: the three per-version compiler nodes were merged into one `compiler` node (golden granularity decision, 2026-11-23).
+# The doc describes only the NEW spec pipeline. The classic annotation/processor code (src/Annotations, Attributes,
+# Processors, Analysers, Merge) is most of the codebase but appears in the doc only as the `pairs` table below.
+repo: swagger-php
+commit: fd3b62e4
+nodes:
+  - { id: builder,       label: "Builder (unified entry point)", paths: [src/Builder.php, src/Builder],        evidence: text }
+  - { id: assembler,     label: "Assembler",                     paths: [src/Assembler.php, src/Assembler],    evidence: text }
+  - { id: specification, label: "Specification (typed buckets)", paths: [src/Specification.php, src/Specification], evidence: text }
+  - { id: resolver,      label: "Resolver",                      paths: [src/Resolver.php, src/Resolver],      evidence: text }
+  - { id: augmenters,    label: "Augmenters (resolve/reduce/augment pipeline)", paths: [src/Augmenter],       evidence: text }
+  - { id: compiler,      label: "Compilers (OpenApi 3.0 / 3.1 / 3.2, one per version)", paths: [src/Compiler, src/Contracts/CompilerInterface.php], evidence: text, note: "merged from compiler-30/31/32: the doc presents them as one table under Compilers" }
+  - { id: walker,        label: "Walker (visits all attributes)", paths: [src/Specification/Walker.php],      evidence: text }
+  - { id: pipe,          label: "Pipeline / PipeInterface",      paths: [src/Utils/Pipeline.php, src/Utils/PipeInterface.php], evidence: text }
+edges:
+  - { from: builder,       to: assembler,     evidence: text, note: "orchestrates the pipeline" }
+  - { from: builder,       to: resolver,      evidence: text }
+  - { from: builder,       to: augmenters,    evidence: text }
+  - { from: builder,       to: compiler,      evidence: text }
+  - { from: assembler,     to: specification, evidence: text, note: "pipeline arrow: leftover attributes are added to the Specification" }
+  - { from: resolver,      to: specification, evidence: text, note: "pipeline arrow Specification -> Resolver; resolver adds collected classes back" }
+  - { from: augmenters,    to: specification, evidence: text, note: "augmenters read from and write to the Specification" }
+  - { from: compiler,      to: specification, evidence: text, note: "compiler transforms a Specification into the document" }
+  - { from: augmenters,    to: pipe,          evidence: text }
+  - { from: augmenters,    to: walker,        evidence: text }
+# Classic processor -> spec equivalent (from the doc's mapping table). For a later comprehension test, not scored as nodes.
+pairs:
+  - { classic: ExpandClasses, spec: [Inheritance, Assembler] }
+  - { classic: ExpandTraits, spec: [Inheritance, Assembler] }
+  - { classic: ExpandInterfaces, spec: [Inheritance, Assembler] }
+  - { classic: ExpandEnums, spec: [Enums] }
+  - { classic: MergeIntoOpenApi, spec: [Assembler] }
+  - { classic: MergeIntoComponents, spec: [Compiler] }
+  - { classic: MergeJsonContent, spec: [Shortcuts] }
+  - { classic: MergeXmlContent, spec: [Shortcuts] }
+  - { classic: BuildPaths, spec: [Compiler] }
+  - { classic: AugmentSchemas, spec: [Names, Types, Assembler, Compiler] }
+  - { classic: AugmentProperties, spec: [Types] }
+  - { classic: AugmentParameters, spec: [Types] }
+  - { classic: AugmentItems, spec: [Types] }
+  - { classic: AugmentRequestBody, spec: [Types] }
+  - { classic: AugmentRefs, spec: [Refs] }
+  - { classic: AugmentDiscriminators, spec: [Refs] }
+  - { classic: AugmentTags, spec: [Tags] }
+  - { classic: AugmentMediaType, spec: [MediaTypes] }
+  - { classic: DocBlockDescriptions, spec: [Docblocks] }
+  - { classic: OperationId, spec: [OperationIds] }
+  - { classic: CleanUnmerged, spec: [Assembler] }
+  - { classic: CleanUnusedComponents, spec: [Cleanup] }
+  - { classic: PathFilter, spec: [PathFilter] }

@@ -2,9 +2,11 @@
 
 Does design-loop keep a design map true while code changes? Tested on real history, not toy examples.
 
-Data (repo clones, stripped copies, golden maps, results) lives outside this repo, in `../design-loop-bench`
-(override with `DESIGN_BENCH`). Golden maps were drafted from each project's own architecture docs, which are
-removed from the copy the agent sees.
+Working data (repo clones, stripped copies, full run transcripts) lives outside this repo, in
+`../design-loop-bench` (override with `DESIGN_BENCH`). A snapshot of what is needed to reproduce and check the
+results is in [`data/`](data): golden maps, the replay checkpoints, `make-stripped.sh` (pinned commits and what
+it strips), and the reports behind the tables below. Golden maps were drafted from each project's own
+architecture docs, which are removed from the copy the agent sees.
 
 ## What it measures
 

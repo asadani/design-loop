@@ -1,0 +1,23 @@
+# Replay checkpoints for gopass. Each checkpoint is the code AFTER that commit, including every commit since the
+# previous checkpoint. `expect` is a judgement call for layer 2 (must / may / noise / control): REVIEW ME.
+repo: gopass
+source: sources/gopass
+golden: golden/gopass.yaml
+base: f25fc7b4e19a66ede32e05a073e24fc04c0fdbc8      # 2026-06-11, last commit before the window
+strip: [ARCHITECTURE.md, AGENTS.md, CLAUDE.md, docs]  # docs/ changes in the window (ADRs, components.dot): strip all of it
+coverage: { roots: [internal, pkg], extensions: [.go] }   # where new code is expected; helpers/ and tests/ are already nodes
+dropAtBase: [hibp]                                   # pkg/hibp is created by A-16 (2026-09-10); at base HIBP lived in an external module
+checkpoints:
+  - { commit: e398dd3974e2597cb4975d21345f9ae390aa9787, label: "age agent launcher",            expect: may }
+  - { commit: 2b095cb7f7d5883c2d4e9f14dbcc41d5bd9b3702, label: "age identity file refactor",    expect: noise }
+  - { commit: 451e9da8ce034203e588994b8b49aab9883b3dfe, label: "AuditList in the public API",   expect: may }
+  - { commit: d6bf336b5786e6c6b7f0cad1a26b9a1b300fc6b4, label: "HIBP into pkg/hibp (ADR A-16)", expect: must }
+  - { commit: 0dfe851aa86a4919ba53910fb2d8926dba3d0a99, label: "goeol version check",           expect: noise }
+  - { commit: 6b878ec37351006dd064614f8d51d55693d7ca39, label: "CONTROL 1: 22 commits, 10 touch Go, no architectural change", expect: control }
+  - { commit: 00a2b4b91606390564b0b1c8b802d26e9a36c543, label: "age identity order",            expect: noise }
+  - { commit: f438c17f702e22567dc1f4cd3b20d2313f7ae8ae, label: "Linux Secret Service daemon",   expect: must }
+  - { commit: a8505c66676d7240b6ddeb90703af2667a5906a4, label: "buildinfo + age agent hello",   expect: may }
+  - { commit: 76a213d4c6709a7ef6aa3f5de542de131066b496, label: "go-git backend (ADR A-17)",     expect: must }
+  - { commit: 4fddbe581464aad08feee48d0ff1a27edd2e28ab, label: "gpg timeout config",            expect: noise }
+  - { commit: f0c64f09a0448b4ec71204ff4c5bafa11810f250, label: "CONTROL 2: 22 commits, 10 touch Go, no architectural change", expect: control }
+  - { commit: f03c0d2fb69a28746c8ccb2199e9403e3753adc9, label: "to golden commit",              expect: may }

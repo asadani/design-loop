@@ -1,0 +1,60 @@
+# DRAFT golden map for gopass @ f03c0d2f. Source: ARCHITECTURE.md (text) + docs/components.png (diagram).
+# Both were removed from stripped/gopass. NEEDS HUMAN REVIEW before any run is scored against it.
+# The doc covers ~13 of ~50 packages: score RECALL against this; extra real packages are "unjudged", not wrong.
+repo: gopass
+commit: f03c0d2f
+nodes:
+  # --- from the text code map
+  - { id: action,      label: "action (CLI commands)",   paths: [internal/action],            evidence: text }
+  - { id: backend,     label: "backend (interfaces + registry)", paths: [internal/backend],  evidence: text }
+  - { id: config,      label: "config",                  paths: [internal/config],            evidence: text }
+  - { id: cui,         label: "cui (console UI helpers)", paths: [internal/cui],              evidence: text }
+  - { id: queue,       label: "queue (background FIFO)", paths: [internal/queue],             evidence: text }
+  - { id: root-store,  label: "root store",              paths: [internal/store/root],        evidence: both }
+  - { id: leaf-store,  label: "leaf store",              paths: [internal/store/leaf],        evidence: both }
+  - { id: tree,        label: "tree",                    paths: [internal/tree],              evidence: both }
+  - { id: updater,     label: "updater",                 paths: [internal/updater],           evidence: text }
+  - { id: pkg-gopass,  label: "pkg/gopass (public API)", paths: [pkg/gopass],                 evidence: text }
+  - { id: appdir,      label: "appdir",                  paths: [pkg/appdir],                 evidence: text }
+  - { id: clipboard,   label: "clipboard",               paths: [pkg/clipboard],              evidence: text }
+  - { id: ctxutil,     label: "ctxutil",                 paths: [pkg/ctxutil],                evidence: text }
+  - { id: helpers,     label: "helpers (release tooling)", paths: [helpers],                  evidence: text }
+  - { id: tests,       label: "integration tests",       paths: [tests],                      evidence: text }
+  # --- diagram only
+  - { id: gitfs,       label: "gitfs storage backend",   paths: [internal/backend/storage/gitfs], evidence: diagram }
+  - { id: gpg-cli,     label: "gpg cli crypto backend",  paths: [internal/backend/crypto/gpg/cli], evidence: diagram }
+  - { id: age,         label: "age crypto backend",      paths: [internal/backend/crypto/age], evidence: diagram }
+  - { id: api,         label: "pkg/gopass/api",          paths: [pkg/gopass/api],             evidence: diagram }
+  - { id: secrets,     label: "pkg/gopass/secrets",      paths: [pkg/gopass/secrets],         evidence: diagram }
+  - { id: hibp,        label: "pkg/hibp",                paths: [pkg/hibp],                   evidence: diagram }
+  # --- external to the repo (cannot be cited; scored separately)
+  - { id: git-binary,  label: "git binary",              citable: false, evidence: diagram }
+  - { id: gpg-binary,  label: "gpg/gpg2 binary",         citable: false, evidence: diagram }
+  - { id: gopass-hibp, label: "gopass-hibp integration", citable: false, evidence: diagram }
+  - { id: jsonapi,     label: "gopass-jsonapi integration", citable: false, evidence: diagram }
+  - { id: summon,      label: "gopass-summon-provider integration", citable: false, evidence: diagram }
+  - { id: git-cred,    label: "git-credential-gopass integration", citable: false, evidence: diagram }
+edges:
+  # diagram arrows (direction as drawn)
+  - { from: action,      to: root-store, evidence: diagram }
+  - { from: action,      to: config,     evidence: diagram, note: "drawn as main binary -> config; action reads config" }
+  - { from: root-store,  to: leaf-store, evidence: both }
+  - { from: root-store,  to: tree,       evidence: diagram }
+  - { from: leaf-store,  to: gitfs,      evidence: both }
+  - { from: leaf-store,  to: gpg-cli,    evidence: both }
+  - { from: leaf-store,  to: age,        evidence: diagram, optional: true, note: "dotted in diagram" }
+  - { from: leaf-store,  to: secrets,    evidence: diagram }
+  - { from: secrets,     to: root-store, evidence: diagram }
+  - { from: api,         to: root-store, evidence: diagram }
+  - { from: api,         to: config,     evidence: diagram }
+  - { from: gitfs,       to: git-binary, evidence: diagram }
+  - { from: gpg-cli,     to: gpg-binary, evidence: diagram }
+  - { from: gopass-hibp, to: hibp,       evidence: diagram }
+  - { from: gopass-hibp, to: api,        evidence: diagram }
+  - { from: jsonapi,     to: api,        evidence: diagram }
+  - { from: summon,      to: api,        evidence: diagram }
+  - { from: git-cred,    to: api,        evidence: diagram }
+  # text-only relationships
+  - { from: gitfs,       to: backend,    evidence: text, undirected: true, note: "backends register with the registry via blank imports" }
+  - { from: gpg-cli,     to: backend,    evidence: text, undirected: true }
+  - { from: age,         to: backend,    evidence: text, undirected: true, note: "registers like gpg-cli; age is named in AGENTS.md/docs not ARCHITECTURE.md" }
