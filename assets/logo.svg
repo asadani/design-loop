@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="t">
+  <title id="t">design-loop</title>
+  <!-- Three map nodes on a ring, joined by clockwise arcs into a loop. The accent node is the change being followed. -->
+  <style>
+    .ink { stroke: #2d3142; }
+    .node { fill: #ffffff; stroke: #2d3142; }
+    .head { fill: #2d3142; }
+    .hot { fill: #bf4520; stroke: #bf4520; }
+    @media (prefers-color-scheme: dark) {
+      .ink { stroke: #e8e9ef; }
+      .node { fill: #23263a; stroke: #e8e9ef; }
+      .head { fill: #e8e9ef; }
+      .hot { fill: #e8734a; stroke: #e8734a; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="2.5" markerHeight="2.5" orient="auto">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke-width="6" stroke-linecap="round">
+    <path class="ink" d="M79,26.9 A40,40 0 0 1 103.6,69.6" marker-end="url(#arrow)"/>
+    <path class="ink" d="M88.6,95.5 A40,40 0 0 1 39.4,95.5" marker-end="url(#arrow)"/>
+    <path class="ink" d="M24.4,69.6 A40,40 0 0 1 49,26.9" marker-end="url(#arrow)"/>
+  </g>
+  <g stroke-width="5">
+    <rect class="hot" x="51" y="11" width="26" height="26" rx="6"/>
+    <rect class="node" x="85.6" y="71" width="26" height="26" rx="6"/>
+    <rect class="node" x="16.4" y="71" width="26" height="26" rx="6"/>
+  </g>
+</svg>

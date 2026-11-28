@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="112" alt="design-loop logo: three map nodes joined into a loop"></p>
+
 # design-loop
 
 A live, versioned design map that follows your coding agent's session.
