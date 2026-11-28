@@ -144,7 +144,25 @@ export function billingCheck(a: Audit | undefined, allowApi = false): string | n
   return `stopping: the session authenticated with apiKeySource "${a.apiKeySource}", not your subscription. Pass --allow-api-billing to accept API billing.`;
 }
 
-export async function runClaude(o: { work: string; out: string; budgetUsd: number; model?: string; timeoutMs: number; bin?: string; prompt?: string; name?: string }): Promise<{ exitCode: number | null; timedOut: boolean; transcript: string }> {
+export interface Clock { wall: () => number; mono: () => number }
+const SYSTEM_CLOCK: Clock = { wall: () => Date.now(), mono: () => Number(process.hrtime.bigint() / 1_000_000n) };
+/** Sleep shorter than this is ignored: scheduling jitter, not a sleeping machine. */
+export const SLEEP_THRESHOLD_MS = 60_000;
+
+/**
+ * Taint reasons for one agent session. The monotonic clock stops while the machine sleeps and the wall clock does
+ * not, so their difference is time asleep. A session killed after the machine slept was interrupted, not slow.
+ */
+export function sessionReasons(timedOut: boolean, sleptMs = 0): string[] {
+  const slept = sleptMs >= SLEEP_THRESHOLD_MS ? Math.round(sleptMs / 60_000) : 0;
+  if (slept && timedOut) return [`interrupted: the machine slept ~${slept} min during this session, then it was killed`];
+  if (slept) return [`the machine slept ~${slept} min during this session`];
+  return timedOut ? ["timed out"] : [];
+}
+
+export async function runClaude(o: { work: string; out: string; budgetUsd: number; model?: string; timeoutMs: number; bin?: string; prompt?: string; name?: string; clock?: Clock }): Promise<{ exitCode: number | null; timedOut: boolean; sleptMs: number; transcript: string }> {
+  const clock = o.clock ?? SYSTEM_CLOCK;
+  const w0 = clock.wall(), m0 = clock.mono();
   const cfg = join(o.out, "mcp.json");
   writeFileSync(cfg, mcpConfig(o.work));
   const args = claudeArgs({ prompt: o.prompt ?? COLD_START_PROMPT, mcpConfigPath: cfg, budgetUsd: o.budgetUsd, model: o.model });
@@ -158,7 +176,8 @@ export async function runClaude(o: { work: string; out: string; budgetUsd: numbe
   const exitCode = await new Promise<number | null>((r) => child.on("close", (c) => r(c)));
   clearTimeout(timer);
   await new Promise<void>((r) => sink.end(() => r()));
-  return { exitCode, timedOut, transcript };
+  const sleptMs = Math.max(0, (clock.wall() - w0) - (clock.mono() - m0));
+  return { exitCode, timedOut, sleptMs, transcript };
 }
 
 // ---------------------------------------------------------------- transcript audit
@@ -259,12 +278,12 @@ export interface RunRecord {
   /** Hash of the golden file this score was computed against. Scores are only comparable at the same hash. */
   goldenHash: string;
   score: Score; final: { rev: number; nodes: number; edges: number; signals: Record<string, number> };
-  approver: ApproverStats; audit?: Audit; tainted: boolean; taintReasons: string[]; wallMs: number; timedOut?: boolean;
+  approver: ApproverStats; audit?: Audit; tainted: boolean; taintReasons: string[]; wallMs: number; timedOut?: boolean; sleptMs?: number;
 }
 
 export const goldenHashOf = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 10);
 
-export function finishRun(o: { repo: string; runId: string; label: string; agent: string; goldenFile: string; paths: RunPaths; approver: ApproverStats; audit?: Audit; wallMs: number; timedOut?: boolean }): RunRecord {
+export function finishRun(o: { repo: string; runId: string; label: string; agent: string; goldenFile: string; paths: RunPaths; approver: ApproverStats; audit?: Audit; wallMs: number; timedOut?: boolean; sleptMs?: number }): RunRecord {
   const golden = loadGolden(o.goldenFile);
   const map = loadCandidate(o.paths.work);
   const signals: Record<string, number> = {};
@@ -273,13 +292,13 @@ export function finishRun(o: { repo: string; runId: string; label: string; agent
     ...(o.audit?.outside.length ? [`read outside working copy: ${o.audit.outside.slice(0, 3).join("; ")}`] : []),
     ...(o.audit?.disallowed.length ? [`ran tools never granted: ${[...new Set(o.audit.disallowed)].join(", ")}`] : []),
     ...(o.audit?.grantedExtra.length ? [`session was started with tools beyond the allowlist: ${o.audit.grantedExtra.join(", ")}`] : []),
-    ...(o.timedOut ? ["timed out"] : []),
+    ...sessionReasons(!!o.timedOut, o.sleptMs),
   ];
   const rec: RunRecord = {
     repo: o.repo, runId: o.runId, label: o.label, agent: o.agent, promptHash: PROMPT_HASH, commit: golden.commit, finished: new Date().toISOString(), goldenHash: goldenHashOf(o.goldenFile),
     score: score(golden, map, o.paths.work),
     final: { rev: map.rev, nodes: map.nodes.length, edges: map.edges.length, signals },
-    approver: o.approver, audit: o.audit, tainted: taintReasons.length > 0, taintReasons, wallMs: o.wallMs, timedOut: o.timedOut,
+    approver: o.approver, audit: o.audit, tainted: taintReasons.length > 0, taintReasons, wallMs: o.wallMs, timedOut: o.timedOut, sleptMs: o.sleptMs,
   };
   writeFileSync(join(o.paths.out, "result.json"), JSON.stringify(rec, null, 2) + "\n");
   cpSync(paths(o.paths.work).dir, join(o.paths.out, "design"), { recursive: true });   // keep the full map + history for audit
@@ -297,7 +316,7 @@ export function reauditRun(dir: string): RunRecord {
     ...(audit.outside.length ? [`read outside working copy: ${audit.outside.slice(0, 3).join("; ")}`] : []),
     ...(audit.disallowed.length ? [`ran tools never granted: ${[...new Set(audit.disallowed)].join(", ")}`] : []),
     ...(audit.grantedExtra.length ? [`session was started with tools beyond the allowlist: ${audit.grantedExtra.join(", ")}`] : []),
-    ...(rec.timedOut ? ["timed out"] : []),
+    ...sessionReasons(!!rec.timedOut, rec.sleptMs),
   ];
   const next: RunRecord = { ...rec, audit, tainted: taintReasons.length > 0, taintReasons };
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n");

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { stringify } from "yaml";
 import { apply, listProposals, loadMap, propose } from "../../core/src/index.ts";
 import type { Op } from "../../core/src/index.ts";
-import { ALLOWED_BUILTIN, auditTranscript, billingCheck, billingPreflight, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, rescoreRun, runScripted, startAutoApprover } from "../harness.ts";
+import { ALLOWED_BUILTIN, auditTranscript, billingCheck, billingPreflight, sessionReasons, claudeArgs, finishRun, MCP_TOOLS, prepareRun, reauditRun, rescoreRun, runScripted, startAutoApprover } from "../harness.ts";
 import type { RunRecord, Step } from "../harness.ts";
 import { COLD_START_PROMPT } from "../prompt.ts";
 import { loadGolden } from "../score.ts";
@@ -270,4 +270,12 @@ test("billing guard: API-billing env refuses up front (names only); a non-subscr
   assert.equal(billingCheck(init()), null, "older transcripts without the field are not blocked");
   assert.match(billingCheck(init("ANTHROPIC_API_KEY"))!, /apiKeySource "ANTHROPIC_API_KEY"/);
   assert.equal(billingCheck(init("ANTHROPIC_API_KEY"), true), null);
+});
+
+test("sleep detection: a slept machine is reported as such, not as a slow agent", () => {
+  assert.deepEqual(sessionReasons(false, 0), []);
+  assert.deepEqual(sessionReasons(true, 0), ["timed out"]);
+  assert.deepEqual(sessionReasons(false, 30_000), [], "under a minute is jitter");
+  assert.deepEqual(sessionReasons(false, 10 * 60_000), ["the machine slept ~10 min during this session"]);
+  assert.deepEqual(sessionReasons(true, 14 * 60_000), ["interrupted: the machine slept ~14 min during this session, then it was killed"]);
 });

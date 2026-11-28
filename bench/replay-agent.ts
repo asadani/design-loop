@@ -5,7 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { apply, baseline, computeSignals, diffMaps, initMap, listProposals, loadMap, propose, saveCoverage } from "../core/src/index.ts";
 import type { MapDoc, Op, Signal } from "../core/src/index.ts";
-import { auditTranscript, billingCheck, billingPreflight, goldenHashOf, runClaude, runScripted, startAutoApprover } from "./harness.ts";
+import { auditTranscript, billingCheck, billingPreflight, goldenHashOf, runClaude, runScripted, sessionReasons, startAutoApprover } from "./harness.ts";
+import type { Clock } from "./harness.ts";
 import type { Audit } from "./harness.ts";
 import { UPDATE_PROMPT_HASH, updatePrompt } from "./prompt.ts";
 import { events, gitState, goldenAtBase, loadConfig, mapOps, materialize, under } from "./replay.ts";
@@ -183,6 +184,8 @@ export interface RunOptions {
   /** Accept API billing. Off by default: a run stops if a session is not on the subscription. */
   allowApiBilling?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Test hook: fake wall and monotonic clocks to simulate a sleeping machine. */
+  clock?: Clock;
 }
 
 async function drained(work: string, ms = 5000) {
@@ -212,13 +215,14 @@ export async function replayAgent(o: RunOptions): Promise<ReplayRun> {
       const before = loadMap(work), startSignals = computeSignals(work);
       const a0 = { ...approver.stats, reasons: [...approver.stats.reasons] };
       writeFileSync(join(o.outDir, `cp-${String(i + 1).padStart(2, "0")}.prompt.txt`), ctx.prompt);
-      let audit: Audit | undefined, timedOut = false;
+      let audit: Audit | undefined, timedOut = false, sleptMs = 0;
       if (o.agent === "oracle" || o.agent === "custom") {
         const ops = o.agent === "oracle" ? oracleOps(work, before, startSignals, prev, cur, `r${i + 1}`) : (o.custom?.(i, before, startSignals) ?? []);
         if (ops.length) await runScripted(work, [{ summary: `oracle: checkpoint ${i + 1}`, ops }]);
       } else if (o.agent === "claude") {
-        const r = await runClaude({ work, out: o.outDir, budgetUsd: o.budgetUsd!, model: o.model, timeoutMs: o.timeoutMs ?? 15 * 60_000, bin: o.bin, prompt: ctx.prompt, name: `cp-${String(i + 1).padStart(2, "0")}` });
-        timedOut = r.timedOut;
+        const r = await runClaude({ work, out: o.outDir, budgetUsd: o.budgetUsd!, model: o.model, timeoutMs: o.timeoutMs ?? 15 * 60_000, bin: o.bin, prompt: ctx.prompt, name: `cp-${String(i + 1).padStart(2, "0")}`, clock: o.clock });
+        timedOut = r.timedOut; sleptMs = r.sleptMs;
+        if (sleptMs >= 60_000) console.error(`warning: checkpoint ${i + 1}: the machine slept ~${Math.round(sleptMs / 60_000)} min; this run will be marked tainted`);
         audit = auditTranscript(readFileSync(r.transcript, "utf8").split("\n"), work);
         cost += audit.costUsd ?? 0;
         const billing = billingCheck(audit, o.allowApiBilling);
@@ -230,7 +234,7 @@ export async function replayAgent(o: RunOptions): Promise<ReplayRun> {
         ...(audit?.outside.length ? [`read outside the working copy: ${audit.outside.join(", ")}`] : []),
         ...(audit?.disallowed.length ? [`ran tools never granted: ${audit.disallowed.join(", ")}`] : []),
         ...(audit?.grantedExtra.length ? [`session started with tools beyond the allowlist: ${audit.grantedExtra.join(", ")}`] : []),
-        ...(timedOut ? ["timed out"] : []),
+        ...sessionReasons(timedOut, sleptMs),
       ];
       results.push({
         label: cp.label, commit: cp.commit, expect: cp.expect,

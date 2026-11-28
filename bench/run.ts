@@ -51,10 +51,10 @@ for (let i = 1; i <= runs; i++) {
   const paths = prepareRun({ stripped, repo: v.repo, runId });
   const approver = startAutoApprover(paths.work);
   const t0 = Date.now();
-  let audit, timedOut = false;
+  let audit, timedOut = false, sleptMs = 0;
   if (isClaude) {
     const r = await runClaude({ work: paths.work, out: paths.out, budgetUsd: budget, model: v.model, timeoutMs: Number(v["timeout-min"]) * 60_000 });
-    timedOut = r.timedOut;
+    timedOut = r.timedOut; sleptMs = r.sleptMs;
     audit = auditTranscript(readFileSync(r.transcript, "utf8").split("\n"), paths.work);
     const billing = billingCheck(audit, v["allow-api-billing"]);
     if (billing) { console.error(billing); process.exit(1); }
@@ -63,7 +63,7 @@ for (let i = 1; i <= runs; i++) {
     await runScripted(paths.work, steps);
   }
   await approver.stop();
-  const rec = finishRun({ repo: v.repo, runId, label: v.label, agent: v.agent!, goldenFile, paths, approver: approver.stats, audit, wallMs: Date.now() - t0, timedOut });
+  const rec = finishRun({ repo: v.repo, runId, label: v.label, agent: v.agent!, goldenFile, paths, approver: approver.stats, audit, wallMs: Date.now() - t0, timedOut, sleptMs });
   const s = rec.score;
   console.log(`${runId}  nodes ${s.nodes.matched}/${s.nodes.citable} (${s.nodes.recall})  edges ${s.edges.hit}/${s.edges.scored} (${s.edges.recall})  cites ${s.cites.validity}  extras ${s.extras.count}  rev ${rec.final.rev}${rec.tainted ? `  TAINTED: ${rec.taintReasons.join("; ")}` : ""}${audit?.costUsd !== undefined ? `  est. $${audit.costUsd.toFixed(2)}` : ""}`);
   console.log(`  -> ${paths.out}/result.json`);

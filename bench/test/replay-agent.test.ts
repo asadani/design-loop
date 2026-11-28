@@ -142,3 +142,20 @@ test("drift is scored per episode: one skipped step counts once, not at every la
   assert.deepEqual([d.episodes, d.sameCheckpoint, d.eventually, d.unresolved], [4, 2, 3, 1]);
   assert.equal(d.meanLife, (1 + 1 + 3 + 3) / 4);
 });
+
+test("claude agent: a session during which the machine slept taints the run with a sleep reason", async () => {
+  const f = fixture();
+  const bin = f.out("fake-claude-sleep.sh");
+  writeFileSync(bin, `#!/bin/sh
+printf '%s\\n' "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"cwd\\":\\"$PWD\\",\\"apiKeySource\\":\\"none\\",\\"tools\\":[\\"Read\\"]}"
+printf '%s\\n' '{"type":"result","total_cost_usd":0.01}'
+`);
+  chmodSync(bin, 0o755);
+  // each wall() call jumps 5 minutes ahead of the monotonic clock: the machine "slept" during every session
+  let w = 0, m = 0;
+  const clock = { wall: () => (w += 5 * 60_000), mono: () => (m += 1) };
+  const r = await replayAgent({ cfg: f.cfg, agent: "claude", label: "s", runId: "s1", outDir: f.out("s1"), budgetUsd: 0.5, bin, env: {}, clock });
+  assert.equal(r.tainted, true);
+  assert.deepEqual(r.checkpoints[0].taintReasons, ["the machine slept ~5 min during this session"]);
+  f.done();
+});
