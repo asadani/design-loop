@@ -1,0 +1,10 @@
+roots:
+  - core
+  - mcp
+  - cli
+  - viewer
+  - bench
+extensions:
+  - .ts
+  - .js
+acknowledged: []

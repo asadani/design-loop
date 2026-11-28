@@ -1,0 +1,117 @@
+version: 1
+kind: architecture
+title: design-loop
+rev: 1
+nodes:
+  - id: core
+    label: core
+    role: backend
+    status: stable
+    cites:
+      - path: core/src
+        hash: sha256:c651487f030418c3
+    note: Schema, ops, propose/apply, history, signals, coverage. The only code that
+      writes .design/.
+  - id: mcp
+    label: MCP server
+    role: backend
+    status: stable
+    cites:
+      - path: mcp/src
+        hash: sha256:5f42f3382827fcc8
+    note: "The agent's only write path: read, propose, history. No apply, reject,
+      pins or coverage."
+  - id: cli
+    label: CLI
+    role: backend
+    status: stable
+    cites:
+      - path: cli/src
+        hash: sha256:680d83477a6e7fd0
+    note: Human decisions (TTY only) and the Claude Code Stop hook.
+  - id: viewer-server
+    label: viewer server
+    role: backend
+    status: stable
+    cites:
+      - path: viewer/src
+        hash: sha256:1ba718c1eb8aa39c
+    note: 127.0.0.1 only, per-session token, Host/Origin checks.
+  - id: viewer-ui
+    label: viewer UI
+    role: frontend
+    status: stable
+    cites:
+      - path: viewer/public
+        hash: sha256:8a45794c1f3cc396
+    note: Map, history, pending proposals, signals; zoom and pan.
+  - id: bench
+    label: benchmark
+    role: backend
+    status: stable
+    cites:
+      - path: bench
+        hash: sha256:c6a3f65231328605
+    note: Cold start and replay harness; auto-approver for benchmark runs only.
+  - id: design-files
+    label: .design/ files
+    role: database
+    status: stable
+    cites:
+      - path: schema/design-map-v0.md
+        hash: sha256:a6e431c3c3503eb4
+    note: map.yaml, pins.yaml, coverage.yaml, proposals/, history/, signals.json.
+  - id: agent
+    label: coding agent
+    role: external
+    note: Claude Code or any MCP client.
+  - id: human
+    label: human reviewer
+    role: external
+    note: Applies or rejects every change.
+edges:
+  - id: e1
+    from: agent
+    to: mcp
+    label: reads, proposes
+  - id: e2
+    from: mcp
+    to: core
+    label: read, propose
+  - id: e3
+    from: cli
+    to: core
+    label: apply, reject, pins, coverage, signals
+  - id: e4
+    from: viewer-server
+    to: core
+    label: read, apply, reject
+  - id: e5
+    from: viewer-ui
+    to: viewer-server
+    label: HTTP API with token
+  - id: e6
+    from: cli
+    to: viewer-server
+    label: view starts it
+  - id: e7
+    from: core
+    to: design-files
+    label: reads and writes
+  - id: e8
+    from: human
+    to: cli
+    label: decides
+  - id: e9
+    from: human
+    to: viewer-ui
+    label: reviews
+  - id: e10
+    from: bench
+    to: core
+    label: applies proposals (benchmark only)
+  - id: e11
+    from: bench
+    to: mcp
+    label: drives agents through it
+groups: []

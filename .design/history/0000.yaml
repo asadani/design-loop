@@ -1,0 +1,16 @@
+rev: 0
+applied: 2026-11-28T06:21:57.355Z
+proposal: null
+source:
+  kind: human
+  summary: Initialised map
+ops: []
+decided_by: human
+snapshot:
+  version: 1
+  kind: architecture
+  title: design-loop
+  rev: 0
+  nodes: []
+  edges: []
+  groups: []

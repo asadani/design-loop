@@ -1,0 +1,152 @@
+id: 1
+base_rev: 0
+created: 2026-11-28T06:22:19.072Z
+source:
+  kind: agent-turn
+  summary: First map of design-loop itself, from the code layout and imports
+ops:
+  - op: add_node
+    node:
+      id: core
+      label: core
+      role: backend
+      status: stable
+      cites:
+        - path: core/src
+      note: Schema, ops, propose/apply, history, signals, coverage. The only code that
+        writes .design/.
+  - op: add_node
+    node:
+      id: mcp
+      label: MCP server
+      role: backend
+      status: stable
+      cites:
+        - path: mcp/src
+      note: "The agent's only write path: read, propose, history. No apply, reject,
+        pins or coverage."
+  - op: add_node
+    node:
+      id: cli
+      label: CLI
+      role: backend
+      status: stable
+      cites:
+        - path: cli/src
+      note: Human decisions (TTY only) and the Claude Code Stop hook.
+  - op: add_node
+    node:
+      id: viewer-server
+      label: viewer server
+      role: backend
+      status: stable
+      cites:
+        - path: viewer/src
+      note: 127.0.0.1 only, per-session token, Host/Origin checks.
+  - op: add_node
+    node:
+      id: viewer-ui
+      label: viewer UI
+      role: frontend
+      status: stable
+      cites:
+        - path: viewer/public
+      note: Map, history, pending proposals, signals; zoom and pan.
+  - op: add_node
+    node:
+      id: bench
+      label: benchmark
+      role: backend
+      status: stable
+      cites:
+        - path: bench
+      note: Cold start and replay harness; auto-approver for benchmark runs only.
+  - op: add_node
+    node:
+      id: design-files
+      label: .design/ files
+      role: database
+      status: stable
+      cites:
+        - path: schema/design-map-v0.md
+      note: map.yaml, pins.yaml, coverage.yaml, proposals/, history/, signals.json.
+  - op: add_node
+    node:
+      id: agent
+      label: coding agent
+      role: external
+      note: Claude Code or any MCP client.
+  - op: add_node
+    node:
+      id: human
+      label: human reviewer
+      role: external
+      note: Applies or rejects every change.
+  - op: add_edge
+    edge:
+      id: e1
+      from: agent
+      to: mcp
+      label: reads, proposes
+  - op: add_edge
+    edge:
+      id: e2
+      from: mcp
+      to: core
+      label: read, propose
+  - op: add_edge
+    edge:
+      id: e3
+      from: cli
+      to: core
+      label: apply, reject, pins, coverage, signals
+  - op: add_edge
+    edge:
+      id: e4
+      from: viewer-server
+      to: core
+      label: read, apply, reject
+  - op: add_edge
+    edge:
+      id: e5
+      from: viewer-ui
+      to: viewer-server
+      label: HTTP API with token
+  - op: add_edge
+    edge:
+      id: e6
+      from: cli
+      to: viewer-server
+      label: view starts it
+  - op: add_edge
+    edge:
+      id: e7
+      from: core
+      to: design-files
+      label: reads and writes
+  - op: add_edge
+    edge:
+      id: e8
+      from: human
+      to: cli
+      label: decides
+  - op: add_edge
+    edge:
+      id: e9
+      from: human
+      to: viewer-ui
+      label: reviews
+  - op: add_edge
+    edge:
+      id: e10
+      from: bench
+      to: core
+      label: applies proposals (benchmark only)
+  - op: add_edge
+    edge:
+      id: e11
+      from: bench
+      to: mcp
+      label: drives agents through it
+state: applied
+decided_by: human
