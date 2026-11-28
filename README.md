@@ -55,6 +55,11 @@ or new code appeared that no node covers):
 { "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "node /path/to/design-loop/cli/src/bin.ts hook stop" } ] } ] } }
 ```
 
+## Does it work?
+
+Tested on 195 real commits of gopass: with the `uncovered` signal on, an agent mapped every new component,
+fixed drift promptly and changed nothing on control checkpoints. Method, numbers and limits: [`bench/README.md`](bench/README.md).
+
 ## Layout
 
 | Path | Purpose |
